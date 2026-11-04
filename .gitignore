@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Nuxt
+node_modules/
+.nuxt/
+.output/
+.data/
+dist/
+
+# Ambiente
+.env
+!.env.example
+
+# Editor / SO
+.DS_Store
+.idea/
+.vscode/

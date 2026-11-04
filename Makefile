@@ -1,0 +1,55 @@
+.PHONY: install run run-detached down down-clean db run-api run-front migrate migration test lint format typecheck check
+
+# Instalar dependências de todos os sub-projetos
+install:
+	cd backend && uv sync
+	cd frontend && pnpm install
+
+# Rodar tudo via Docker (com hot reload)
+run:
+	docker compose up --build --watch
+
+run-detached:
+	docker compose up -d --build
+
+down:
+	docker compose down
+
+# Para e apaga o volume do banco
+down-clean:
+	docker compose down -v
+
+# Só o Postgres (para rodar API/front localmente)
+db:
+	docker compose up -d postgres
+
+run-api:
+	cd backend && DATABASE_URL=postgresql+asyncpg://ritmo:ritmo@localhost:5433/ritmo uv run uvicorn app.main:app --reload
+
+run-front:
+	cd frontend && pnpm dev
+
+migrate:
+	cd backend && uv run alembic upgrade head
+
+# Uso: make migration m="cria usuario"
+migration:
+	cd backend && uv run alembic revision --autogenerate -m "$(m)"
+
+test:
+	cd backend && uv run pytest
+
+lint:
+	cd backend && uv run ruff check . && uv run ruff format --check .
+	cd frontend && pnpm lint
+
+format:
+	cd backend && uv run ruff check --fix . && uv run ruff format .
+	cd frontend && pnpm lint:fix
+
+typecheck:
+	cd backend && uv run mypy app
+	cd frontend && pnpm typecheck
+
+# Tudo que o CI roda
+check: lint typecheck test

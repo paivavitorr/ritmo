@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+/*
+ * Ritmo — tokens do design system (blueprint, seção 3).
+ * Neutros frios e enevoados + trios de categoria: lavado (50), pastel (200), tinta (700).
+ * Cores de categoria são referenciadas por token, nunca por hex livre.
+ */
+@theme {
+  /* Neutros */
+  --color-nevoa: #f5f6f3;
+  --color-papel: #fcfcfa;
+  --color-linha: #e3e5df;
+  --color-grafite-suave: #8a8f99;
+  --color-tinta: #363b47;
+  --color-foco: #7c8cc4;
+
+  /* Categorias */
+  --color-ardosia-50: #eef2f8;
+  --color-ardosia-200: #c9d6ea;
+  --color-ardosia-700: #3e5170;
+
+  --color-glicinia-50: #f2eff8;
+  --color-glicinia-200: #d9cfee;
+  --color-glicinia-700: #58467e;
+
+  --color-salvia-50: #eef5f0;
+  --color-salvia-200: #c6e0cf;
+  --color-salvia-700: #355e45;
+
+  --color-ceu-50: #eef6f8;
+  --color-ceu-200: #c4e1ea;
+  --color-ceu-700: #2f5d6b;
+
+  --color-manteiga-50: #faf6e8;
+  --color-manteiga-200: #f1e3b3;
+  --color-manteiga-700: #6b5520;
+
+  --color-rosa-cha-50: #f9eff0;
+  --color-rosa-cha-200: #eed0d4;
+  --color-rosa-cha-700: #7a3f4a;
+
+  --color-pessego-50: #fbf1ea;
+  --color-pessego-200: #f3d6c2;
+  --color-pessego-700: #7a4a2c;
+
+  /* Semânticos */
+  --color-erro: #9a4a55;
+
+  /* Tipografia (escala 1.2) */
+  --font-sans: "Figtree", system-ui, sans-serif;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.1875rem;
+  --text-xl: 1.4375rem;
+  --text-2xl: 1.75rem;
+  --font-weight-semibold: 650;
+
+  /* Forma e movimento */
+  --radius-bloco: 10px;
+  --radius-sheet: 22px;
+  --shadow-elevado: 0 6px 20px -8px rgb(62 81 112 / 0.22);
+  --ease-suave: cubic-bezier(0.22, 0.8, 0.36, 1);
+}
+
+@layer base {
+  html {
+    background-color: var(--color-nevoa);
+    color: var(--color-tinta);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-foco);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0ms !important;
+      animation-duration: 0ms !important;
+    }
+  }
+}
+
+/* Durações e horários nunca "dançam". */
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
