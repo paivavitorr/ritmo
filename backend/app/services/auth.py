@@ -18,6 +18,7 @@ from app.core.security import (
     verificar_senha,
 )
 from app.models.usuario import SessaoRefresh, Usuario
+from app.repositories.categoria import CategoriaRepository
 from app.repositories.usuario import SessaoRefreshRepository, UsuarioRepository
 from app.schemas.usuario import LoginRequest, TokenResponse, UsuarioCreate, UsuarioRead
 
@@ -39,6 +40,7 @@ class AuthService:
         self.session = session
         self.usuarios = UsuarioRepository(session)
         self.sessoes = SessaoRefreshRepository(session)
+        self.categorias = CategoriaRepository(session)
         self.settings = get_settings()
 
     async def registrar(
@@ -61,6 +63,7 @@ class AuthService:
         )
         try:
             await self.usuarios.criar(usuario)
+            await self.categorias.criar_padroes_do_usuario(usuario.id)
             resposta, refresh_bruto = await self._emitir_par_tokens(usuario, user_agent=user_agent)
             await self.session.commit()
         except IntegrityError as exc:

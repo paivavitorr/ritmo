@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.core.errors import registrar_exception_handlers
 from app.db import engine
-from app.routers import auth, saude
+from app.routers import auth, blocos, categorias, execucoes, modelos_semana, saude
 
 
 @asynccontextmanager
@@ -31,6 +31,10 @@ def create_app() -> FastAPI:
     registrar_exception_handlers(app)
     app.include_router(saude.router)
     app.include_router(auth.router)
+    app.include_router(categorias.router)
+    app.include_router(modelos_semana.router)
+    app.include_router(blocos.router)
+    app.include_router(execucoes.router)
     return app
 
 

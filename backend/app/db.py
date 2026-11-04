@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import DateTime, Integer, MetaData, Uuid, func
@@ -29,7 +29,9 @@ class TimestampMixin:
 
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     atualizado_em: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 

@@ -1,4 +1,4 @@
-.PHONY: install run run-detached down down-clean db run-api run-front migrate migration test lint format typecheck check
+.PHONY: install run run-detached down down-clean db run-api run-front migrate migration types test lint format typecheck check
 
 # Instalar dependências de todos os sub-projetos
 install:
@@ -35,6 +35,13 @@ migrate:
 # Uso: make migration m="cria usuario"
 migration:
 	cd backend && uv run alembic revision --autogenerate -m "$(m)"
+
+# Gera tipos TypeScript a partir do OpenAPI do FastAPI (sem precisar subir servidor)
+types:
+	mkdir -p frontend/app/types
+	cd backend && uv run python -c "import json; from app.main import app; print(json.dumps(app.openapi(), ensure_ascii=False, indent=2))" > ../frontend/app/types/openapi.json
+	cd frontend && pnpm exec openapi-typescript app/types/openapi.json -o app/types/api.d.ts && rm -f app/types/openapi.json
+	cd frontend && pnpm lint:fix
 
 test:
 	cd backend && uv run pytest
