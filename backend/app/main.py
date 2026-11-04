@@ -5,8 +5,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.core.errors import registrar_exception_handlers
 from app.db import engine
-from app.routers import saude
+from app.routers import auth, saude
 
 
 @asynccontextmanager
@@ -22,12 +23,14 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origens,
-        allow_credentials=True,  # refresh token em cookie httpOnly (F1)
+        allow_credentials=True,  # refresh token em cookie httpOnly
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    registrar_exception_handlers(app)
     app.include_router(saude.router)
+    app.include_router(auth.router)
     return app
 
 

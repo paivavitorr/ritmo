@@ -1,9 +1,12 @@
 from collections.abc import AsyncGenerator
 from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy import DateTime, Integer, MetaData, Uuid, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.pool import StaticPool
+from uuid6 import uuid7
 
 from app.config import get_settings
 
@@ -30,8 +33,24 @@ class TimestampMixin:
     )
 
 
+class EntidadeMixin(TimestampMixin):
+    """Mixin base com UUIDv7, controle otimista de versão e soft delete."""
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
+    versao: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    excluido_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
+
 _settings = get_settings()
-engine = create_async_engine(_settings.database_url, echo=_settings.sql_echo, pool_pre_ping=True)
+_is_sqlite_memory = _settings.database_url.endswith(":memory:")
+engine = create_async_engine(
+    _settings.database_url,
+    echo=_settings.sql_echo,
+    pool_pre_ping=not _is_sqlite_memory,
+    poolclass=StaticPool if _is_sqlite_memory else None,
+)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
