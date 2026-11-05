@@ -7,8 +7,10 @@ from app.core.tempo import garantir_utc
 from app.dependencies import CurrentUserDep, SessionDep
 from app.models.bloco import Bloco, PausaPlanejada
 from app.models.execucao import Execucao, PausaExecucao
+from app.models.usuario import Usuario
 from app.repositories.bloco import BlocoRepository
 from app.repositories.execucao import ExecucaoRepository
+from app.repositories.lembrete import LembreteRepository
 from app.schemas.sync import (
     ItemMutacaoSync,
     ItemResultadoSync,
@@ -16,22 +18,24 @@ from app.schemas.sync import (
     SyncBatchResponse,
 )
 from app.services.horas_liquidas import Intervalo, segundos_liquidos
+from app.services.lembrete import agendar_lembrete_para_bloco
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
 
 async def _processar_mutacao_bloco(
     m: ItemMutacaoSync,
-    usuario_id: object,
+    usuario: Usuario,
     session: SessionDep,
 ) -> ItemResultadoSync:
     repo = BlocoRepository(session)
-    bloco = await repo.obter_do_usuario(usuario_id, m.entidade_id)  # type: ignore[arg-type]
+    bloco = await repo.obter_do_usuario(usuario.id, m.entidade_id)
 
     if m.acao == "excluir":
         if bloco is not None and bloco.excluido_em is None:
             bloco.excluido_em = datetime.now(UTC)
             bloco.versao += 1
+            await LembreteRepository(session).cancelar_lembretes_do_bloco(bloco.id)
             return ItemResultadoSync(
                 mutacao_id=m.id, status="aplicado", versao_servidor=bloco.versao
             )
@@ -56,6 +60,7 @@ async def _processar_mutacao_bloco(
                     else:
                         setattr(bloco, k, v)
             bloco.versao += 1
+            await agendar_lembrete_para_bloco(session, bloco, usuario.antecedencia_padrao_min)
             return ItemResultadoSync(
                 mutacao_id=m.id, status="aplicado", versao_servidor=bloco.versao
             )
@@ -76,7 +81,7 @@ async def _processar_mutacao_bloco(
         dt_local = date.fromisoformat(str(data_local_val)) if data_local_val else m.criado_em.date()
         novo = Bloco(
             id=m.entidade_id,
-            usuario_id=usuario_id,
+            usuario_id=usuario.id,
             categoria_id=UUID(str(m.payload["categoria_id"])),
             tipo=m.payload.get("tipo", "rotina"),
             titulo=m.payload.get("titulo", "Sem título"),
@@ -87,6 +92,7 @@ async def _processar_mutacao_bloco(
             pausas_planejadas=pausas_orm,
         )
         await repo.criar(novo)
+        await agendar_lembrete_para_bloco(session, novo, usuario.antecedencia_padrao_min)
         return ItemResultadoSync(mutacao_id=m.id, status="aplicado", versao_servidor=novo.versao)
 
     if m.acao == "atualizar":
@@ -111,6 +117,7 @@ async def _processar_mutacao_bloco(
                 else:
                     setattr(bloco, k, v)
         bloco.versao += 1
+        await agendar_lembrete_para_bloco(session, bloco, usuario.antecedencia_padrao_min)
         return ItemResultadoSync(mutacao_id=m.id, status="aplicado", versao_servidor=bloco.versao)
 
     return ItemResultadoSync(mutacao_id=m.id, status="ignorado")
@@ -217,7 +224,7 @@ async def sincronizar_mutacoes(
         try:
             async with session.begin_nested():
                 if m.entidade == "bloco":
-                    res = await _processar_mutacao_bloco(m, usuario.id, session)
+                    res = await _processar_mutacao_bloco(m, usuario, session)
                 elif m.entidade == "execucao":
                     res = await _processar_mutacao_execucao(m, usuario.id, session)
                 else:

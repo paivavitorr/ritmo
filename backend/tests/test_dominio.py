@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from httpx import AsyncClient
@@ -489,6 +489,63 @@ async def test_sync_batch_lww_cria_e_atualiza_bloco_offline(client: AsyncClient)
     get_atualizado = await client.get(f"/blocos/{bloco_offline_id}", headers=headers)
     assert get_atualizado.status_code == 200
     assert get_atualizado.json()["titulo"] == "Treino Matinal Editado Offline"
+
+
+async def test_push_obter_chave_e_salvar_assinatura(client: AsyncClient) -> None:
+    _, headers = await _criar_usuario_com_token(client)
+
+    chave_resp = await client.get("/push/chave-publica")
+    assert chave_resp.status_code == 200
+    assert len(chave_resp.json()["public_key"]) > 20
+
+    ass_resp = await client.post(
+        "/push/assinar",
+        headers=headers,
+        json={
+            "endpoint": "https://fcm.googleapis.com/fcm/send/fake-endpoint-token",
+            "p256dh": "fake-p256dh-key",
+            "auth": "fake-auth-secret",
+            "user_agent": "Mozilla/5.0 (X11; Linux x86_64)",
+        },
+    )
+    assert ass_resp.status_code == 201
+    assert ass_resp.json()["endpoint"] == "https://fcm.googleapis.com/fcm/send/fake-endpoint-token"
+
+    # Desassinar
+    des_resp = await client.post(
+        "/push/desassinar",
+        headers=headers,
+        json={"endpoint": "https://fcm.googleapis.com/fcm/send/fake-endpoint-token"},
+    )
+    assert des_resp.status_code == 204
+
+
+async def test_lembrete_agendado_ao_criar_bloco_e_cancelado_ao_excluir(
+    client: AsyncClient,
+) -> None:
+    _, headers = await _criar_usuario_com_token(client)
+    cat_id = (await client.get("/categorias", headers=headers)).json()[0]["id"]
+
+    # Início no futuro (amanhã) para garantir agendamento de lembrete
+    inicio = (datetime.now(UTC) + timedelta(days=1)).replace(microsecond=0)
+    fim = inicio + timedelta(hours=1)
+
+    criado = await client.post(
+        "/blocos",
+        headers=headers,
+        json={
+            "categoria_id": cat_id,
+            "titulo": "Bloco com lembrete",
+            "inicio": inicio.isoformat(),
+            "fim": fim.isoformat(),
+        },
+    )
+    assert criado.status_code == 201
+    bloco_id = criado.json()["id"]
+
+    # Excluir o bloco cancela os lembretes pendentes
+    del_resp = await client.delete(f"/blocos/{bloco_id}", headers=headers)
+    assert del_resp.status_code == 204
 
 
 async def test_confirmar_bloco_substitui_execucao_existente(client: AsyncClient) -> None:

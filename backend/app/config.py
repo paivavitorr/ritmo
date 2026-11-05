@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     cookie_seguro: bool = False
     registro_aberto: bool = True
 
+    # Web Push / VAPID
+    vapid_public_key: str = (
+        "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U"
+    )
+    vapid_private_key: str = "UU2x74o7OHF8F5HnI2q8g9-dEeqT4H-96Qk9_qUjXm0"
+    vapid_claim_email: str = "mailto:suporte@ritmo.local"
+    despachador_ativo: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

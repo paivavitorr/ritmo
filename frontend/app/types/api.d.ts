@@ -450,6 +450,57 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/push/chave-publica': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** Obter Chave Publica */
+    get: operations['obter_chave_publica_push_chave_publica_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/push/assinar': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Salvar Assinatura Push */
+    post: operations['salvar_assinatura_push_push_assinar_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/push/desassinar': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Remover Assinatura Push */
+    post: operations['remover_assinatura_push_push_desassinar_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -1103,6 +1154,53 @@ export interface components {
              * Format: date-time
              */
       fim: string
+    }
+    /** PushAssinaturaCreate */
+    PushAssinaturaCreate: {
+      /** Endpoint */
+      endpoint: string
+      /** P256Dh */
+      p256dh: string
+      /** Auth */
+      auth: string
+      /** User Agent */
+      user_agent?: string | null
+    }
+    /** PushAssinaturaRead */
+    PushAssinaturaRead: {
+      /**
+             * Id
+             * Format: uuid
+             */
+      id: string
+      /**
+             * Usuario Id
+             * Format: uuid
+             */
+      usuario_id: string
+      /** Endpoint */
+      endpoint: string
+      /** P256Dh */
+      p256dh: string
+      /** Auth */
+      auth: string
+      /** User Agent */
+      user_agent: string | null
+      /**
+             * Criado Em
+             * Format: date-time
+             */
+      criado_em: string
+    }
+    /** PushChavePublicaResponse */
+    PushChavePublicaResponse: {
+      /** Public Key */
+      public_key: string
+    }
+    /** PushDesassinarRequest */
+    PushDesassinarRequest: {
+      /** Endpoint */
+      endpoint: string
     }
     /** ResumoPeriodoResponse */
     ResumoPeriodoResponse: {
@@ -2349,6 +2447,90 @@ export interface operations {
         content: {
           'application/json': components['schemas']['SyncBatchResponse']
         }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  obter_chave_publica_push_chave_publica_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PushChavePublicaResponse']
+        }
+      }
+    }
+  }
+  salvar_assinatura_push_push_assinar_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PushAssinaturaCreate']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PushAssinaturaRead']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  remover_assinatura_push_push_desassinar_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PushDesassinarRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
       }
       /** @description Validation Error */
       422: {

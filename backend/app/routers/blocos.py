@@ -12,6 +12,7 @@ from app.models.execucao import Execucao, PausaExecucao
 from app.repositories.bloco import BlocoRepository
 from app.repositories.categoria import CategoriaRepository
 from app.repositories.execucao import ExecucaoRepository
+from app.repositories.lembrete import LembreteRepository
 from app.schemas.bloco import (
     BlocoCreate,
     BlocoRead,
@@ -20,6 +21,7 @@ from app.schemas.bloco import (
 )
 from app.schemas.execucao import ExecucaoRead
 from app.services.horas_liquidas import Intervalo, segundos_liquidos
+from app.services.lembrete import agendar_lembrete_para_bloco
 
 router = APIRouter(prefix="/blocos", tags=["blocos"])
 
@@ -118,6 +120,7 @@ async def criar_bloco(
     repo = BlocoRepository(session)
     bloco = Bloco(**kwargs)
     await repo.criar(bloco)
+    await agendar_lembrete_para_bloco(session, bloco, usuario.antecedencia_padrao_min)
     await session.commit()
     recarregado = await repo.obter_do_usuario(usuario.id, bloco.id)
     assert recarregado is not None
@@ -205,6 +208,7 @@ async def atualizar_bloco(
                 bloco.modelo_bloco_id = None
 
         bloco.versao += 1
+        await agendar_lembrete_para_bloco(session, bloco, usuario.antecedencia_padrao_min)
         await session.commit()
         recarregado = await repo.obter_do_usuario(usuario.id, bloco.id)
         assert recarregado is not None
@@ -226,6 +230,7 @@ async def excluir_bloco(
 
     bloco.excluido_em = datetime.now(UTC)
     bloco.versao += 1
+    await LembreteRepository(session).cancelar_lembretes_do_bloco(bloco.id)
     await session.commit()
 
 
