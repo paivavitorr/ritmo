@@ -416,6 +416,23 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/resumo': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** Obter Resumo */
+    get: operations['obter_resumo_resumo_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -601,6 +618,32 @@ export interface components {
              */
       atualizado_em: string
     }
+    /** CategoriaResumo */
+    CategoriaResumo: {
+      /** Categoria Id */
+      categoria_id: string | null
+      /** Nome */
+      nome: string
+      /** Cor */
+      cor: string
+      /** Conta Como Produtiva */
+      conta_como_produtiva: boolean
+      /** Segundos Planejados */
+      segundos_planejados: number
+      /** Segundos Executados */
+      segundos_executados: number
+      /** Segundos Liquidos Aderentes */
+      segundos_liquidos_aderentes: number
+      /** Aderencia Volume */
+      aderencia_volume: number
+      /** Aderencia Temporal */
+      aderencia_temporal: number
+      /**
+             * Eh Espontaneo
+             * @default false
+             */
+      eh_espontaneo: boolean
+    }
     /** CategoriaUpdate */
     CategoriaUpdate: {
       /** Nome */
@@ -755,6 +798,48 @@ export interface components {
       status?: ('em_andamento' | 'concluida' | 'parcial' | 'pulada') | null
       /** Pausas */
       pausas?: components['schemas']['PausaExecucaoInput'][] | null
+    }
+    /** FaixaDia */
+    FaixaDia: {
+      /**
+             * Data
+             * Format: date
+             */
+      data: string
+      /** Segundos Planejados */
+      segundos_planejados: number
+      /** Segundos Executados */
+      segundos_executados: number
+      /** Aderencia Volume */
+      aderencia_volume: number
+      /** Aderencia Temporal */
+      aderencia_temporal: number
+      /** Planejados */
+      planejados: components['schemas']['FaixaIntervalo'][]
+      /** Executados */
+      executados: components['schemas']['FaixaIntervalo'][]
+    }
+    /** FaixaIntervalo */
+    FaixaIntervalo: {
+      /** Inicio Iso */
+      inicio_iso: string
+      /** Fim Iso */
+      fim_iso: string
+      /**
+             * Tipo
+             * @enum {string}
+             */
+      tipo: 'planejado' | 'executado'
+      /** Categoria Id */
+      categoria_id: string | null
+      /** Categoria Nome */
+      categoria_nome: string
+      /** Categoria Cor */
+      categoria_cor: string
+      /** Titulo */
+      titulo: string
+      /** Status */
+      status?: string | null
     }
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -952,6 +1037,36 @@ export interface components {
              * Format: date-time
              */
       fim: string
+    }
+    /** ResumoPeriodoResponse */
+    ResumoPeriodoResponse: {
+      /**
+             * De
+             * Format: date
+             */
+      de: string
+      /**
+             * Ate
+             * Format: date
+             */
+      ate: string
+      /**
+             * Agrupamento
+             * @enum {string}
+             */
+      agrupamento: 'dia' | 'semana'
+      /** Total Segundos Planejados */
+      total_segundos_planejados: number
+      /** Total Segundos Executados */
+      total_segundos_executados: number
+      /** Aderencia Volume Geral */
+      aderencia_volume_geral: number
+      /** Aderencia Temporal Geral */
+      aderencia_temporal_geral: number
+      /** Categorias */
+      categorias: components['schemas']['CategoriaResumo'][]
+      /** Faixas Dias */
+      faixas_dias: components['schemas']['FaixaDia'][]
     }
     /** SaudeResponse */
     SaudeResponse: {
@@ -2089,6 +2204,39 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['ExecucaoRead']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  obter_resumo_resumo_get: {
+    parameters: {
+      query: {
+        de: string
+        ate: string
+        agrupar?: 'dia' | 'semana'
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ResumoPeriodoResponse']
         }
       }
       /** @description Validation Error */

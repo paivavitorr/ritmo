@@ -351,6 +351,77 @@ async def test_ciclo_cronometro_iniciar_pausar_retomar_concluir_e_auto_encerrar(
     assert ativa_vazia.json() is None
 
 
+async def test_resumo_calcula_aderencia_e_separa_espontaneo(client: AsyncClient) -> None:
+    _, headers = await _criar_usuario_com_token(client)
+    cats = (await client.get("/categorias", headers=headers)).json()
+    cat_estudo = next(c for c in cats if c["nome"] == "Estudo")["id"]
+
+    # 1. Bloco de Estudo: 2h (10:00 às 12:00 = 7200s)
+    b = await client.post(
+        "/blocos",
+        headers=headers,
+        json={
+            "categoria_id": cat_estudo,
+            "titulo": "Algoritmos",
+            "inicio": "2026-11-06T10:00:00Z",
+            "fim": "2026-11-06T12:00:00Z",
+        },
+    )
+    assert b.status_code == 201
+    bloco_id = b.json()["id"]
+
+    # Execução vinculada: executou 1h das 2h (10:00 às 11:00 = 3600s)
+    ex_bloco = await client.post(
+        "/execucoes",
+        headers=headers,
+        json={
+            "categoria_id": cat_estudo,
+            "bloco_id": bloco_id,
+            "inicio": "2026-11-06T10:00:00Z",
+            "fim": "2026-11-06T11:00:00Z",
+            "status": "parcial",
+            "origem": "cronometro",
+        },
+    )
+    assert ex_bloco.status_code == 201
+
+    # 2. Execução espontânea/avulsa (sem bloco_id): 30 min (1800s)
+    ex_avulsa = await client.post(
+        "/execucoes",
+        headers=headers,
+        json={
+            "categoria_id": cat_estudo,
+            "inicio": "2026-11-06T15:00:00Z",
+            "fim": "2026-11-06T15:30:00Z",
+            "status": "concluida",
+            "origem": "cronometro",
+        },
+    )
+    assert ex_avulsa.status_code == 201
+
+    # Consulta resumo do dia
+    r = await client.get("/resumo?de=2026-11-06&ate=2026-11-06", headers=headers)
+    assert r.status_code == 200
+    resumo_dados = r.json()
+
+    # Categoria Estudo deve ter: planejado 7200s, executado 3600s (aderência volume 0.5)
+    cat_resumo = next(c for c in resumo_dados["categorias"] if c["categoria_id"] == cat_estudo)
+    assert cat_resumo["segundos_planejados"] == 7200
+    assert cat_resumo["segundos_executados"] == 3600
+    assert cat_resumo["aderencia_volume"] == 0.5
+    assert cat_resumo["eh_espontaneo"] is False
+
+    # Linha espontânea separada com 1800s
+    linha_espontanea = next(c for c in resumo_dados["categorias"] if c["eh_espontaneo"] is True)
+    assert linha_espontanea["segundos_executados"] == 1800
+    assert linha_espontanea["segundos_planejados"] == 0
+
+    assert len(resumo_dados["faixas_dias"]) == 1
+    faixa = resumo_dados["faixas_dias"][0]
+    assert len(faixa["planejados"]) == 1
+    assert len(faixa["executados"]) == 2
+
+
 async def test_confirmar_bloco_substitui_execucao_existente(client: AsyncClient) -> None:
     _, headers = await _criar_usuario_com_token(client)
     cat_id = (await client.get("/categorias", headers=headers)).json()[0]["id"]
