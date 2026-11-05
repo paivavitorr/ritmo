@@ -59,5 +59,5 @@ make check       # lint + typecheck + testes (o mesmo que o CI)
 
 ## Roadmap
 
-F0 Setup inicial ✅ · F1 Auth ✅ · F2 Domínio API ✅ · F3 Shell + DS · F4 Timeline · F5 Execução ·
+F0 Setup inicial ✅ · F1 Auth ✅ · F2 Domínio API ✅ · F3 Shell + DS ✅ · F4 Timeline · F5 Execução ·
 F6 Resumo · F7 PWA offline · F8 Lembretes push · F9 MVP

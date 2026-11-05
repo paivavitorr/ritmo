@@ -1,59 +1,70 @@
 <script setup lang="ts">
-const conexao = useConexaoStore()
-onMounted(conexao.verificar)
+const auth = useAuthStore()
+const categoriasStore = useCategoriasStore()
 
-const categorias = [
-  { token: 'ardosia', nome: 'Trabalho' },
-  { token: 'glicinia', nome: 'Estudo' },
-  { token: 'salvia', nome: 'Treino' },
-  { token: 'ceu', nome: 'Descanso' },
-  { token: 'manteiga', nome: 'Pessoal' },
-  { token: 'rosa-cha', nome: 'Compromissos' },
-] as const
+onMounted(() => {
+  categoriasStore.carregar()
+})
 
-// Classes completas e estáticas para o Tailwind detectar.
-const estilos: Record<(typeof categorias)[number]['token'], string> = {
-  'ardosia': 'bg-ardosia-200 text-ardosia-700',
-  'glicinia': 'bg-glicinia-200 text-glicinia-700',
-  'salvia': 'bg-salvia-200 text-salvia-700',
-  'ceu': 'bg-ceu-200 text-ceu-700',
-  'manteiga': 'bg-manteiga-200 text-manteiga-700',
-  'rosa-cha': 'bg-rosa-cha-200 text-rosa-cha-700',
-}
-
-const textoApi = computed(() => ({
-  verificando: 'Conectando à API…',
-  ok: 'API conectada',
-  indisponivel: 'API indisponível. Rode make run-api.',
-})[conexao.api])
+const hojeFormatado = computed(() =>
+  new Intl.DateTimeFormat('pt-BR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  }).format(new Date()),
+)
 </script>
 
 <template>
-  <main class="mx-auto max-w-xl px-6 py-16">
-    <h1 class="text-2xl font-semibold">
-      Ritmo
-    </h1>
-    <p class="mt-2 text-grafite-suave">
-      Sua rotina em blocos. Setup inicial pronto — a timeline chega na F4.
-    </p>
+  <div>
+    <header class="flex flex-wrap items-baseline justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold capitalize text-tinta">
+          {{ hojeFormatado }}
+        </h1>
+        <p class="mt-1 text-sm text-grafite-suave">
+          Olá, {{ auth.usuario?.nome }}. Suas áreas já estão prontas — a régua interativa entra na F4.
+        </p>
+      </div>
 
-    <ul class="mt-10 flex flex-wrap gap-2">
-      <li
-        v-for="c in categorias"
-        :key="c.token"
-        class="rounded-full px-3 py-1 text-sm font-medium"
-        :class="estilos[c.token]"
-      >
-        {{ c.nome }}
-      </li>
-    </ul>
+      <NuxtLink to="/categorias">
+        <BaseButton
+          variante="secundario"
+          tamanho="sm"
+        >
+          Gerenciar categorias
+        </BaseButton>
+      </NuxtLink>
+    </header>
 
-    <p
-      class="mt-10 text-sm"
-      :class="conexao.api === 'indisponivel' ? 'text-erro' : 'text-grafite-suave'"
-      role="status"
-    >
-      {{ textoApi }}
-    </p>
-  </main>
+    <!-- Áreas ativas do usuário -->
+    <section class="mt-8 rounded-[var(--radius-bloco)] border border-linha bg-papel p-6">
+      <h2 class="text-base font-semibold text-tinta">
+        Suas áreas de rotina
+      </h2>
+      <p class="mt-1 text-sm text-grafite-suave">
+        Cada bloco planejado usa o contorno pastel da categoria e vai sendo preenchido conforme a execução.
+      </p>
+
+      <div class="mt-4 flex flex-wrap gap-2">
+        <BaseChip
+          v-for="cat in categoriasStore.itens"
+          :key="cat.id"
+          :cor="cat.cor"
+        >
+          {{ cat.nome }}
+        </BaseChip>
+      </div>
+    </section>
+
+    <!-- Convite para a timeline (F4) -->
+    <section class="mt-6 rounded-[var(--radius-bloco)] border border-dashed border-linha bg-papel/60 p-8 text-center">
+      <p class="text-base font-medium text-tinta">
+        Seu dia está livre.
+      </p>
+      <p class="mt-1 text-sm text-grafite-suave">
+        Na próxima fase (F4), você poderá arrastar diretamente na régua de 24 horas para criar e ajustar seus blocos.
+      </p>
+    </section>
+  </div>
 </template>
