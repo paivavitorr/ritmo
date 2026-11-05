@@ -2,6 +2,7 @@
 import { useArrasto, type ModoArrasto } from '~/composables/useArrasto'
 import type { BlocoRead } from '~/stores/blocos'
 import type { CategoriaRead } from '~/stores/categorias'
+import { calcularSegundosLiquidosAoVivo, type ExecucaoRead } from '~/stores/execucoes'
 import { calcularLayoutSobreposicao } from '~/utils/horasLiquidas'
 import {
   arredondarParaStep,
@@ -14,19 +15,50 @@ interface Props {
   fuso: string
   blocos: BlocoRead[]
   categoriasPorId: Map<string, CategoriaRead>
+  execucoesPorBlocoId?: Map<string, ExecucaoRead[]>
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  execucoesPorBlocoId: () => new Map(),
+})
 
 const emit = defineEmits<{
   criarEmMinuto: [inicioMin: number]
   selecionarBloco: [bloco: BlocoRead]
   moverOuRedimensionar: [bloco: BlocoRead, novoInicioIso: string, novoFimIso: string]
+  alternarConfirmacao: [bloco: BlocoRead]
+  iniciarCronometro: [bloco: BlocoRead]
 }>()
 
 const larguraJanela = ref(1024)
+const agoraMs = ref(Date.now())
+let timerRelogio: ReturnType<typeof setInterval> | null = null
 const containerScroll = ref<HTMLElement | null>(null)
 const areaBlocos = ref<HTMLElement | null>(null)
+
+function execucaoPrincipal(blocoId: string): ExecucaoRead | undefined {
+  const lista = props.execucoesPorBlocoId.get(blocoId)
+  if (!lista || !lista.length) return undefined
+  const aberta = lista.find(e => e.status === 'em_andamento' && e.fim == null)
+  if (aberta) return aberta
+  return lista[lista.length - 1]
+}
+
+function percentualExecutadoDoBloco(bloco: BlocoRead): number {
+  const lista = props.execucoesPorBlocoId.get(bloco.id)
+  if (!lista || !lista.length || bloco.segundos_liquidos_planejados <= 0) return 0
+  let totalSegundos = 0
+  for (const e of lista) {
+    if (e.status === 'pulada') continue
+    if (e.status === 'em_andamento' && e.fim == null) {
+      totalSegundos += calcularSegundosLiquidosAoVivo(e, agoraMs.value)
+    }
+    else {
+      totalSegundos += e.segundos_liquidos
+    }
+  }
+  return Math.min(100, Math.round((totalSegundos / bloco.segundos_liquidos_planejados) * 100))
+}
 
 const pxPorMinuto = computed(() => (larguraJanela.value >= 1024 ? 1.4 : 1.1))
 
@@ -141,6 +173,9 @@ function aoClicarFundoRegua(evento: MouseEvent) {
 onMounted(() => {
   atualizarLargura()
   window.addEventListener('resize', atualizarLargura)
+  timerRelogio = setInterval(() => {
+    agoraMs.value = Date.now()
+  }, 5000)
 
   // Posiciona o scroll inicial próximo ao horário atual (ou 07:00)
   nextTick(() => {
@@ -157,6 +192,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', atualizarLargura)
+  if (timerRelogio) clearInterval(timerRelogio)
 })
 </script>
 
@@ -202,9 +238,13 @@ onBeforeUnmount(() => {
           :inicio-min-exibido="inicioMinParaRender(item)"
           :fim-min-exibido="fimMinParaRender(item)"
           :em-arrasto="arrastoAtivo?.blocoId === item.bloco.id"
+          :percentual-executado="percentualExecutadoDoBloco(item.bloco)"
+          :status-execucao="execucaoPrincipal(item.bloco.id)?.status ?? null"
           @selecionar="emit('selecionarBloco', $event)"
           @iniciar-pointer="(ev, modo) => aoIniciarPointerNoBloco(ev, item, modo)"
           @mover-teclado="(dIni, dFim) => aoMoverPorTeclado(item, dIni, dFim)"
+          @alternar-confirmacao="emit('alternarConfirmacao', $event)"
+          @iniciar-cronometro="emit('iniciarCronometro', $event)"
         />
       </div>
     </div>

@@ -27,6 +27,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (usuario.value && usuario.value.id !== resposta.usuario.id) {
       useCategoriasStore().limpar()
       useBlocosStore().limpar()
+      useExecucoesStore().limpar()
     }
     accessToken.value = resposta.access_token
     usuario.value = resposta.usuario
@@ -37,6 +38,7 @@ export const useAuthStore = defineStore('auth', () => {
     usuario.value = null
     useCategoriasStore().limpar()
     useBlocosStore().limpar()
+    useExecucoesStore().limpar()
   }
 
   async function tentarRefresh(): Promise<boolean> {

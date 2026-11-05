@@ -11,9 +11,12 @@ import {
 const auth = useAuthStore()
 const categoriasStore = useCategoriasStore()
 const blocosStore = useBlocosStore()
+const execucoesStore = useExecucoesStore()
 
 const fusoUsuario = computed(() => auth.usuario?.fuso || 'America/Manaus')
 const dataAtivaIso = ref(hojeIsoNoFuso(fusoUsuario.value))
+const tickRelogio = ref(0)
+let timerTick: ReturnType<typeof setInterval> | null = null
 
 const sheetAberto = ref(false)
 const blocoSelecionado = ref<BlocoRead | null>(null)
@@ -27,12 +30,31 @@ const totalPlanejadoSegundos = computed(() =>
   blocosDoDia.value.reduce((acc, b) => acc + b.segundos_liquidos_planejados, 0),
 )
 
+const totalExecutadoSegundos = computed(() => {
+  const _tick = tickRelogio.value
+  void _tick
+  return blocosDoDia.value.reduce((acc, b) => {
+    const lista = execucoesStore.porBlocoId.get(b.id) ?? []
+    return (
+      acc
+      + lista.reduce((s, e) => {
+        if (e.status === 'pulada') return s
+        if (e.status === 'em_andamento' && e.fim == null) {
+          return s + calcularSegundosLiquidosAoVivo(e, Date.now())
+        }
+        return s + e.segundos_liquidos
+      }, 0)
+    )
+  }, 0)
+})
+
 async function carregarDadosDoDia() {
   erroOperacao.value = null
   try {
     await Promise.all([
       categoriasStore.carregar(),
       blocosStore.carregarPeriodo(dataAtivaIso.value, dataAtivaIso.value),
+      execucoesStore.carregarPeriodo(dataAtivaIso.value, dataAtivaIso.value),
     ])
   }
   catch (e: unknown) {
@@ -41,7 +63,16 @@ async function carregarDadosDoDia() {
 }
 
 watch(dataAtivaIso, carregarDadosDoDia)
-onMounted(carregarDadosDoDia)
+onMounted(() => {
+  carregarDadosDoDia()
+  timerTick = setInterval(() => {
+    tickRelogio.value++
+  }, 1000)
+})
+
+onBeforeUnmount(() => {
+  if (timerTick) clearInterval(timerTick)
+})
 
 function navegarDia(delta: number) {
   dataAtivaIso.value = somarDiasIso(dataAtivaIso.value, delta)
@@ -76,6 +107,35 @@ async function aoMoverOuRedimensionar(
       e,
       'Não foi possível mover o bloco. A posição original foi restaurada.',
     )
+  }
+}
+
+async function alternarConfirmacaoBloco(bloco: BlocoRead) {
+  erroOperacao.value = null
+  const ex = execucoesStore.execucaoPrincipalDoBloco(bloco.id)
+  try {
+    if (ex && ex.status === 'concluida') {
+      await execucoesStore.excluirExecucao(ex.id)
+    }
+    else {
+      await execucoesStore.confirmarBloco(bloco.id, 'concluida')
+    }
+  }
+  catch (e: unknown) {
+    erroOperacao.value = extrairMensagemErro(e, 'Não foi possível alterar a confirmação do bloco.')
+  }
+}
+
+async function iniciarCronometroBloco(bloco: BlocoRead) {
+  erroOperacao.value = null
+  try {
+    await execucoesStore.iniciarCronometro({
+      bloco_id: bloco.id,
+      categoria_id: bloco.categoria_id,
+    })
+  }
+  catch (e: unknown) {
+    erroOperacao.value = extrairMensagemErro(e, 'Não foi possível iniciar o cronômetro.')
   }
 }
 
@@ -120,7 +180,10 @@ async function desfazerExclusao() {
         </div>
         <p class="tabular mt-1 text-sm text-grafite-suave">
           <template v-if="blocosDoDia.length">
-            {{ blocosDoDia.length }} bloco(s) · {{ formatarDuracaoSegundos(totalPlanejadoSegundos) }} líquidas planejadas
+            {{ blocosDoDia.length }} bloco(s) · {{ formatarDuracaoSegundos(totalPlanejadoSegundos) }} planejadas
+            <template v-if="totalExecutadoSegundos > 0">
+              · <span class="font-medium text-tinta">{{ formatarDuracaoSegundos(totalExecutadoSegundos) }} executadas</span>
+            </template>
           </template>
           <template v-else>
             Seu dia está livre. Clique na régua ou use o botão para criar o primeiro bloco.
@@ -164,6 +227,9 @@ async function desfazerExclusao() {
       </div>
     </header>
 
+    <!-- Widget flutuante de cronômetro ativo -->
+    <CronometroAtivo />
+
     <!-- Alerta de erro ou toast de desfazer exclusão -->
     <p
       v-if="erroOperacao"
@@ -194,9 +260,12 @@ async function desfazerExclusao() {
       :fuso="fusoUsuario"
       :blocos="blocosDoDia"
       :categorias-por-id="categoriasStore.mapaPorId"
+      :execucoes-por-bloco-id="execucoesStore.porBlocoId"
       @criar-em-minuto="abrirNovoBloco"
       @selecionar-bloco="abrirEdicaoBloco"
       @mover-ou-redimensionar="aoMoverOuRedimensionar"
+      @alternar-confirmacao="alternarConfirmacaoBloco"
+      @iniciar-cronometro="iniciarCronometroBloco"
     />
 
     <!-- Modal responsivo de criação / edição -->

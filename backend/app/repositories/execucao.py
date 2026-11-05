@@ -42,6 +42,39 @@ class ExecucaoRepository:
         resultado = await self.session.execute(stmt)
         return resultado.scalar_one_or_none()
 
+    async def listar_em_andamento(
+        self, usuario_id: UUID, for_update: bool = False
+    ) -> list[Execucao]:
+        stmt = (
+            select(Execucao)
+            .options(selectinload(Execucao.pausas))
+            .where(
+                Execucao.usuario_id == usuario_id,
+                Execucao.excluido_em.is_(None),
+                Execucao.status == "em_andamento",
+                Execucao.fim.is_(None),
+            )
+            .order_by(Execucao.inicio.desc())
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        resultado = await self.session.execute(stmt)
+        return list(resultado.scalars().all())
+
+    async def listar_por_bloco(self, usuario_id: UUID, bloco_id: UUID) -> list[Execucao]:
+        stmt = (
+            select(Execucao)
+            .options(selectinload(Execucao.pausas))
+            .where(
+                Execucao.usuario_id == usuario_id,
+                Execucao.bloco_id == bloco_id,
+                Execucao.excluido_em.is_(None),
+            )
+            .order_by(Execucao.inicio.asc())
+        )
+        resultado = await self.session.execute(stmt)
+        return list(resultado.scalars().all())
+
     async def criar(self, execucao: Execucao) -> Execucao:
         self.session.add(execucao)
         await self.session.flush()

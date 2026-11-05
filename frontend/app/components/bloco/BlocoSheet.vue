@@ -3,6 +3,7 @@ import type { PausaEditavel } from '~/components/bloco/PausasEditor.vue'
 import { extrairMensagemErro } from '~/composables/useApi'
 import type { BlocoRead } from '~/stores/blocos'
 import type { CategoriaRead } from '~/stores/categorias'
+import { calcularSegundosLiquidosAoVivo } from '~/stores/execucoes'
 import { formatarDuracaoMinutos } from '~/utils/coresCategoria'
 import { calcularMinutosLiquidos } from '~/utils/horasLiquidas'
 import {
@@ -33,6 +34,7 @@ const emit = defineEmits<{
 }>()
 
 const blocosStore = useBlocosStore()
+const execucoesStore = useExecucoesStore()
 
 const titulo = ref('')
 const categoriaId = ref('')
@@ -46,10 +48,164 @@ const repetirNaSemana = ref(false)
 const salvando = ref(false)
 const erro = ref<string | null>(null)
 
+// Edição de execução manual vinculada ao bloco
+const mostrarEditorExecucao = ref(false)
+const execHoraInicio = ref('08:00')
+const execHoraFim = ref('09:00')
+const execStatus = ref<'concluida' | 'parcial' | 'pulada'>('concluida')
+const execPausas = ref<PausaEditavel[]>([])
+
+const execucaoDoBloco = computed(() =>
+  props.blocoEditando
+    ? execucoesStore.execucaoPrincipalDoBloco(props.blocoEditando.id)
+    : undefined,
+)
+
+function preencherEditorExecucao() {
+  if (!props.blocoEditando) return
+  const ex = execucaoDoBloco.value
+  if (ex) {
+    const iniMin = minutosDesdeMeiaNoiteNoFuso(ex.inicio, props.dataIso, props.fuso)
+    const fimMin = ex.fim
+      ? minutosDesdeMeiaNoiteNoFuso(ex.fim, props.dataIso, props.fuso)
+      : minutosDesdeMeiaNoiteNoFuso(new Date().toISOString(), props.dataIso, props.fuso)
+    execHoraInicio.value = minutosParaHoraInput(iniMin)
+    execHoraFim.value = minutosParaHoraInput(Math.max(iniMin + 5, fimMin))
+    execStatus.value = ex.status === 'em_andamento' ? 'concluida' : ex.status
+    execPausas.value = ex.pausas
+      .filter(p => p.fim != null)
+      .map((p) => {
+        const pIni = minutosDesdeMeiaNoiteNoFuso(p.inicio, props.dataIso, props.fuso)
+        const pFim = minutosDesdeMeiaNoiteNoFuso(p.fim!, props.dataIso, props.fuso)
+        return {
+          inicioHora: minutosParaHoraInput(pIni),
+          fimHora: minutosParaHoraInput(pFim),
+        }
+      })
+  }
+  else {
+    execHoraInicio.value = horaInicio.value
+    execHoraFim.value = horaFim.value
+    execStatus.value = 'concluida'
+    execPausas.value = [...pausas.value]
+  }
+}
+
+async function confirmarNoSheet(statusAlvo: 'concluida' | 'pulada') {
+  if (!props.blocoEditando) return
+  erro.value = null
+  salvando.value = true
+  try {
+    await execucoesStore.confirmarBloco(props.blocoEditando.id, statusAlvo)
+    preencherEditorExecucao()
+  }
+  catch (e: unknown) {
+    erro.value = extrairMensagemErro(e, 'Não foi possível registrar a execução.')
+  }
+  finally {
+    salvando.value = false
+  }
+}
+
+async function iniciarCronometroNoSheet() {
+  if (!props.blocoEditando) return
+  erro.value = null
+  salvando.value = true
+  try {
+    await execucoesStore.iniciarCronometro({
+      bloco_id: props.blocoEditando.id,
+      categoria_id: props.blocoEditando.categoria_id,
+    })
+    emit('fechar')
+  }
+  catch (e: unknown) {
+    erro.value = extrairMensagemErro(e, 'Não foi possível iniciar o cronômetro.')
+  }
+  finally {
+    salvando.value = false
+  }
+}
+
+async function salvarExecucaoManual() {
+  if (!props.blocoEditando) return
+  erro.value = null
+  const ini = horaInputParaMinutos(execHoraInicio.value)
+  let fim = horaInputParaMinutos(execHoraFim.value)
+  if (fim <= ini) fim += 1440
+
+  const pausasPayload = []
+  for (const p of execPausas.value) {
+    let pIni = horaInputParaMinutos(p.inicioHora)
+    let pFim = horaInputParaMinutos(p.fimHora)
+    if (pIni < ini) pIni += 1440
+    if (pFim < pIni) pFim += 1440
+    if (pFim <= pIni || pIni < ini || pFim > fim) {
+      erro.value = 'As pausas da execução devem estar dentro do horário real informado.'
+      return
+    }
+    pausasPayload.push({
+      inicio: criarTimestampUtcDeMinutosLocais(props.dataIso, pIni, props.fuso),
+      fim: criarTimestampUtcDeMinutosLocais(props.dataIso, pFim, props.fuso),
+    })
+  }
+
+  const inicioIso = criarTimestampUtcDeMinutosLocais(props.dataIso, ini, props.fuso)
+  const fimIso = criarTimestampUtcDeMinutosLocais(props.dataIso, fim, props.fuso)
+
+  salvando.value = true
+  try {
+    if (execucaoDoBloco.value) {
+      await execucoesStore.atualizarManual(execucaoDoBloco.value.id, {
+        categoria_id: categoriaId.value,
+        bloco_id: props.blocoEditando.id,
+        inicio: inicioIso,
+        fim: fimIso,
+        status: execStatus.value,
+        pausas: pausasPayload,
+      })
+    }
+    else {
+      await execucoesStore.criarManual({
+        categoria_id: categoriaId.value,
+        bloco_id: props.blocoEditando.id,
+        inicio: inicioIso,
+        fim: fimIso,
+        status: execStatus.value,
+        origem: 'manual',
+        pausas: pausasPayload,
+      })
+    }
+    mostrarEditorExecucao.value = false
+  }
+  catch (e: unknown) {
+    erro.value = extrairMensagemErro(e, 'Não foi possível salvar o registro manual.')
+  }
+  finally {
+    salvando.value = false
+  }
+}
+
+async function limparExecucaoDoBloco() {
+  if (!execucaoDoBloco.value) return
+  erro.value = null
+  salvando.value = true
+  try {
+    await execucoesStore.excluirExecucao(execucaoDoBloco.value.id)
+    mostrarEditorExecucao.value = false
+  }
+  catch (e: unknown) {
+    erro.value = extrairMensagemErro(e, 'Não foi possível remover a execução.')
+  }
+  finally {
+    salvando.value = false
+  }
+}
+
 function preencherFormulario() {
   erro.value = null
   repetirNaSemana.value = false
   lembretes.value = [10]
+  mostrarEditorExecucao.value = false
 
   if (props.blocoEditando) {
     const b = props.blocoEditando
@@ -69,6 +225,7 @@ function preencherFormulario() {
         fimHora: minutosParaHoraInput(pFim),
       }
     })
+    preencherEditorExecucao()
   }
   else {
     titulo.value = ''
@@ -258,6 +415,155 @@ async function excluir() {
       class="flex flex-col gap-5"
       @submit.prevent="salvar"
     >
+      <!-- Seção de execução real (apenas ao editar bloco existente) -->
+      <section
+        v-if="props.blocoEditando"
+        class="space-y-3 rounded-[var(--radius-bloco)] border border-linha bg-nevoa/60 p-3.5"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p class="text-xs font-semibold text-tinta">
+              Execução real deste bloco
+            </p>
+            <p class="tabular text-xs text-grafite-suave">
+              <template v-if="execucaoDoBloco">
+                Status:
+                <strong class="text-tinta">{{ execucaoDoBloco.status }}</strong>
+                · {{
+                  formatarDuracaoMinutos(
+                    Math.round(
+                      (execucaoDoBloco.status === 'em_andamento' && execucaoDoBloco.fim == null
+                        ? calcularSegundosLiquidosAoVivo(execucaoDoBloco, Date.now())
+                        : execucaoDoBloco.segundos_liquidos) / 60,
+                    ),
+                  )
+                }} líquidas registradas
+              </template>
+              <template v-else>
+                Ainda não registrado como executado.
+              </template>
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-1.5">
+            <BaseButton
+              tamanho="sm"
+              :variante="execucaoDoBloco?.status === 'concluida' ? 'primario' : 'secundario'"
+              :carregando="salvando"
+              @click="confirmarNoSheet('concluida')"
+            >
+              ✓ Fiz como planejado
+            </BaseButton>
+            <BaseButton
+              v-if="execucaoDoBloco?.status !== 'em_andamento'"
+              tamanho="sm"
+              variante="secundario"
+              :carregando="salvando"
+              @click="iniciarCronometroNoSheet"
+            >
+              ▶ Cronômetro
+            </BaseButton>
+            <BaseButton
+              tamanho="sm"
+              variante="fantasma"
+              @click="
+                () => {
+                  preencherEditorExecucao()
+                  mostrarEditorExecucao = !mostrarEditorExecucao
+                }
+              "
+            >
+              {{ mostrarEditorExecucao ? 'Ocultar ajuste' : 'Ajustar real' }}
+            </BaseButton>
+          </div>
+        </div>
+
+        <!-- Editor manual de execução -->
+        <div
+          v-if="mostrarEditorExecucao"
+          class="space-y-3 border-t border-linha pt-3"
+        >
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label
+                for="exec-inicio"
+                class="block text-xs font-medium text-grafite-suave"
+              >
+                Início real
+              </label>
+              <input
+                id="exec-inicio"
+                v-model="execHoraInicio"
+                type="time"
+                class="tabular mt-1 w-full rounded border border-linha bg-papel px-2.5 py-1.5 text-xs text-tinta"
+              >
+            </div>
+            <div>
+              <label
+                for="exec-fim"
+                class="block text-xs font-medium text-grafite-suave"
+              >
+                Fim real
+              </label>
+              <input
+                id="exec-fim"
+                v-model="execHoraFim"
+                type="time"
+                class="tabular mt-1 w-full rounded border border-linha bg-papel px-2.5 py-1.5 text-xs text-tinta"
+              >
+            </div>
+            <div>
+              <label
+                for="exec-status"
+                class="block text-xs font-medium text-grafite-suave"
+              >
+                Status
+              </label>
+              <select
+                id="exec-status"
+                v-model="execStatus"
+                class="mt-1 w-full rounded border border-linha bg-papel px-2.5 py-1.5 text-xs text-tinta"
+              >
+                <option value="concluida">
+                  Concluída
+                </option>
+                <option value="parcial">
+                  Parcial
+                </option>
+                <option value="pulada">
+                  Pulada
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <PausasEditor
+            v-model="execPausas"
+            :hora-inicio-bloco="execHoraInicio"
+          />
+
+          <div class="flex items-center justify-between gap-2 pt-1">
+            <button
+              v-if="execucaoDoBloco"
+              type="button"
+              class="text-xs font-medium text-erro hover:underline"
+              @click="limparExecucaoDoBloco"
+            >
+              Limpar execução
+            </button>
+            <span v-else />
+
+            <BaseButton
+              tamanho="sm"
+              variante="secundario"
+              :carregando="salvando"
+              @click="salvarExecucaoManual"
+            >
+              Salvar tempo real
+            </BaseButton>
+          </div>
+        </div>
+      </section>
       <BaseInput
         id="bloco-titulo"
         v-model="titulo"

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -82,6 +83,37 @@ class ExecucaoUpdate(BaseModel):
             if getattr(self, campo) is None:
                 raise ValueError(f"O campo '{campo}' não pode ser nulo")
         return self
+
+
+class ExecucaoIniciarRequest(BaseModel):
+    id: UUID | None = None
+    categoria_id: UUID | None = None
+    bloco_id: UUID | None = None
+    instante: datetime | None = None
+
+    @field_validator("instante", mode="after")
+    @classmethod
+    def normalizar_utc(cls, valor: datetime | None) -> datetime | None:
+        if valor is not None:
+            return garantir_utc(valor)
+        return None
+
+
+class ExecucaoTransicaoRequest(BaseModel):
+    instante: datetime | None = None
+    status: Literal["concluida", "parcial"] = "concluida"
+
+    @field_validator("instante", mode="after")
+    @classmethod
+    def normalizar_utc(cls, valor: datetime | None) -> datetime | None:
+        if valor is not None:
+            return garantir_utc(valor)
+        return None
+
+
+class ExecucaoConfirmarBlocoRequest(BaseModel):
+    bloco_id: UUID
+    status: Literal["concluida", "parcial", "pulada"] = "concluida"
 
 
 class ExecucaoRead(BaseModel):

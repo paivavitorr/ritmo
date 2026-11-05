@@ -268,7 +268,7 @@ export interface paths {
     put?: never
     /**
          * Confirmar Bloco Como Planejado
-         * @description Cria uma `Execucao` concluída idêntica ao bloco planejado ('Fiz como planejado').
+         * @description Cria ou substitui a `Execucao` concluída idêntica ao bloco planejado.
          */
     post: operations['confirmar_bloco_como_planejado_blocos__bloco_id__confirmar_post']
     delete?: never
@@ -295,6 +295,57 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/execucoes/ativa': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** Obter Execucao Ativa */
+    get: operations['obter_execucao_ativa_execucoes_ativa_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/execucoes/iniciar': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Iniciar Execucao */
+    post: operations['iniciar_execucao_execucoes_iniciar_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/execucoes/confirmar-bloco': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Confirmar Bloco Como Planejado */
+    post: operations['confirmar_bloco_como_planejado_execucoes_confirmar_bloco_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/execucoes/{execucao_id}': {
     parameters: {
       query?: never
@@ -312,6 +363,57 @@ export interface paths {
     head?: never
     /** Atualizar Execucao */
     patch: operations['atualizar_execucao_execucoes__execucao_id__patch']
+    trace?: never
+  }
+  '/execucoes/{execucao_id}/pausar': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Pausar Execucao */
+    post: operations['pausar_execucao_execucoes__execucao_id__pausar_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/execucoes/{execucao_id}/retomar': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Retomar Execucao */
+    post: operations['retomar_execucao_execucoes__execucao_id__retomar_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/execucoes/{execucao_id}/concluir': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Concluir Execucao */
+    post: operations['concluir_execucao_execucoes__execucao_id__concluir_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
     trace?: never
   }
 }
@@ -514,6 +616,20 @@ export interface components {
       /** Ordem */
       ordem?: number | null
     }
+    /** ExecucaoConfirmarBlocoRequest */
+    ExecucaoConfirmarBlocoRequest: {
+      /**
+             * Bloco Id
+             * Format: uuid
+             */
+      bloco_id: string
+      /**
+             * Status
+             * @default concluida
+             * @enum {string}
+             */
+      status: 'concluida' | 'parcial' | 'pulada'
+    }
     /** ExecucaoCreate */
     ExecucaoCreate: {
       /** Id */
@@ -549,6 +665,17 @@ export interface components {
       origem: 'cronometro' | 'confirmacao' | 'manual'
       /** Pausas */
       pausas?: components['schemas']['PausaExecucaoInput'][]
+    }
+    /** ExecucaoIniciarRequest */
+    ExecucaoIniciarRequest: {
+      /** Id */
+      id?: string | null
+      /** Categoria Id */
+      categoria_id?: string | null
+      /** Bloco Id */
+      bloco_id?: string | null
+      /** Instante */
+      instante?: string | null
     }
     /** ExecucaoRead */
     ExecucaoRead: {
@@ -602,6 +729,17 @@ export interface components {
              * Format: date-time
              */
       atualizado_em: string
+    }
+    /** ExecucaoTransicaoRequest */
+    ExecucaoTransicaoRequest: {
+      /** Instante */
+      instante?: string | null
+      /**
+             * Status
+             * @default concluida
+             * @enum {string}
+             */
+      status: 'concluida' | 'parcial'
     }
     /** ExecucaoUpdate */
     ExecucaoUpdate: {
@@ -1678,6 +1816,92 @@ export interface operations {
       }
     }
   }
+  obter_execucao_ativa_execucoes_ativa_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ExecucaoRead'] | null
+        }
+      }
+    }
+  }
+  iniciar_execucao_execucoes_iniciar_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ExecucaoIniciarRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ExecucaoRead']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  confirmar_bloco_como_planejado_execucoes_confirmar_bloco_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ExecucaoConfirmarBlocoRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ExecucaoRead']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
   obter_execucao_execucoes__execucao_id__get: {
     parameters: {
       query?: never
@@ -1750,6 +1974,111 @@ export interface operations {
     requestBody: {
       content: {
         'application/json': components['schemas']['ExecucaoUpdate']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ExecucaoRead']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  pausar_execucao_execucoes__execucao_id__pausar_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        execucao_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['ExecucaoTransicaoRequest'] | null
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ExecucaoRead']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  retomar_execucao_execucoes__execucao_id__retomar_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        execucao_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['ExecucaoTransicaoRequest'] | null
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ExecucaoRead']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  concluir_execucao_execucoes__execucao_id__concluir_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        execucao_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['ExecucaoTransicaoRequest'] | null
       }
     }
     responses: {

@@ -20,18 +20,22 @@ interface Props {
   fimMinExibido: number
   emArrasto?: boolean
   percentualExecutado?: number
+  statusExecucao?: 'em_andamento' | 'concluida' | 'parcial' | 'pulada' | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
   categoria: undefined,
   emArrasto: false,
   percentualExecutado: 0,
+  statusExecucao: null,
 })
 
 const emit = defineEmits<{
   selecionar: [bloco: BlocoRead]
   iniciarPointer: [evento: PointerEvent, modo: ModoArrasto]
   moverTeclado: [deltaIniMin: number, deltaFimMin: number]
+  alternarConfirmacao: [bloco: BlocoRead]
+  iniciarCronometro: [bloco: BlocoRead]
 }>()
 
 const corToken = computed(() => props.categoria?.cor ?? 'ardosia')
@@ -153,7 +157,7 @@ function aoTeclar(e: KeyboardEvent) {
     />
 
     <!-- Conteúdo textual do bloco -->
-    <div class="relative z-10 flex items-baseline justify-between gap-2">
+    <div class="relative z-10 flex items-start justify-between gap-2">
       <div class="min-w-0">
         <p class="truncate text-xs font-semibold leading-tight">
           {{ props.bloco.titulo }}
@@ -167,9 +171,49 @@ function aoTeclar(e: KeyboardEvent) {
         </p>
       </div>
 
-      <span class="tabular shrink-0 text-[11px] font-medium">
-        {{ minutosParaHoraInput(props.inicioMinExibido) }}–{{ minutosParaHoraInput(props.fimMinExibido) }}
-      </span>
+      <div class="flex shrink-0 items-center gap-1.5">
+        <span class="tabular text-[11px] font-medium">
+          {{ minutosParaHoraInput(props.inicioMinExibido) }}–{{ minutosParaHoraInput(props.fimMinExibido) }}
+        </span>
+
+        <!-- Botão 1-toque: Fiz como planejado / Desmarcar -->
+        <button
+          type="button"
+          :aria-label="
+            props.statusExecucao === 'concluida'
+              ? `Desmarcar conclusão de ${props.bloco.titulo}`
+              : `Confirmar ${props.bloco.titulo} como planejado`
+          "
+          :title="
+            props.statusExecucao === 'concluida'
+              ? 'Concluído (clique para desmarcar)'
+              : 'Fiz como planejado (1 toque)'
+          "
+          class="flex h-5 w-5 items-center justify-center rounded-full border transition-colors"
+          :class="
+            props.statusExecucao === 'concluida'
+              ? 'border-current bg-tinta text-papel'
+              : 'border-current/40 bg-papel/80 text-current hover:bg-papel'
+          "
+          @pointerdown.stop
+          @click.stop="emit('alternarConfirmacao', props.bloco)"
+        >
+          <span class="text-[10px] font-bold leading-none">✓</span>
+        </button>
+
+        <!-- Botão rápido de iniciar cronômetro quando não está em andamento -->
+        <button
+          v-if="props.statusExecucao !== 'em_andamento'"
+          type="button"
+          :aria-label="`Iniciar cronômetro para ${props.bloco.titulo}`"
+          title="Iniciar cronômetro neste bloco"
+          class="hidden h-5 w-5 items-center justify-center rounded-full border border-current/40 bg-papel/80 text-[9px] text-current hover:bg-papel group-hover:flex"
+          @pointerdown.stop
+          @click.stop="emit('iniciarCronometro', props.bloco)"
+        >
+          ▶
+        </button>
+      </div>
     </div>
 
     <div

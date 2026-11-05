@@ -264,3 +264,125 @@ async def test_execucao_manual_recalcula_segundos_liquidos(client: AsyncClient) 
     listagem = await client.get("/execucoes?de=2026-11-04&ate=2026-11-04", headers=headers)
     assert listagem.status_code == 200
     assert len(listagem.json()) == 1
+
+
+async def test_ciclo_cronometro_iniciar_pausar_retomar_concluir_e_auto_encerrar(
+    client: AsyncClient,
+) -> None:
+    _, headers = await _criar_usuario_com_token(client)
+    cats = (await client.get("/categorias", headers=headers)).json()
+    cat_trabalho = cats[0]["id"]
+    cat_estudo = cats[1]["id"]
+
+    # Iniciar cronômetro às 10:00:00Z
+    ini1 = await client.post(
+        "/execucoes/iniciar",
+        headers=headers,
+        json={
+            "categoria_id": cat_trabalho,
+            "instante": "2026-11-05T10:00:00Z",
+        },
+    )
+    assert ini1.status_code == 201
+    exec1 = ini1.json()
+    exec1_id = exec1["id"]
+    assert exec1["status"] == "em_andamento"
+    assert exec1["fim"] is None
+
+    # GET /execucoes/ativa retorna a execução em andamento
+    ativa = await client.get("/execucoes/ativa", headers=headers)
+    assert ativa.status_code == 200
+    assert ativa.json()["id"] == exec1_id
+
+    # Pausar às 10:30:00Z
+    pausada = await client.post(
+        f"/execucoes/{exec1_id}/pausar",
+        headers=headers,
+        json={"instante": "2026-11-05T10:30:00Z"},
+    )
+    assert pausada.status_code == 200
+    assert len(pausada.json()["pausas"]) == 1
+    assert pausada.json()["pausas"][0]["fim"] is None
+
+    # Tentar pausar novamente retorna 409
+    dup_pausa = await client.post(f"/execucoes/{exec1_id}/pausar", headers=headers)
+    assert dup_pausa.status_code == 409
+
+    # Retomar às 10:40:00Z (10 min de pausa = 600s)
+    retomada = await client.post(
+        f"/execucoes/{exec1_id}/retomar",
+        headers=headers,
+        json={"instante": "2026-11-05T10:40:00Z"},
+    )
+    assert retomada.status_code == 200
+    assert retomada.json()["pausas"][0]["fim"] is not None
+
+    # Iniciar segunda execução às 11:00:00Z encerra automaticamente a primeira
+    ini2 = await client.post(
+        "/execucoes/iniciar",
+        headers=headers,
+        json={
+            "categoria_id": cat_estudo,
+            "instante": "2026-11-05T11:00:00Z",
+        },
+    )
+    assert ini2.status_code == 201
+    exec2_id = ini2.json()["id"]
+
+    # Verificar que a primeira foi concluída com 3600s - 600s = 3000s líquidos
+    e1_final = await client.get(f"/execucoes/{exec1_id}", headers=headers)
+    assert e1_final.status_code == 200
+    assert e1_final.json()["status"] == "concluida"
+    assert e1_final.json()["segundos_liquidos"] == 3000
+
+    # Concluir a segunda às 11:25:00Z (1500s)
+    conc2 = await client.post(
+        f"/execucoes/{exec2_id}/concluir",
+        headers=headers,
+        json={"instante": "2026-11-05T11:25:00Z", "status": "concluida"},
+    )
+    assert conc2.status_code == 200
+    assert conc2.json()["status"] == "concluida"
+    assert conc2.json()["segundos_liquidos"] == 1500
+
+    # Nenhuma ativa restante
+    ativa_vazia = await client.get("/execucoes/ativa", headers=headers)
+    assert ativa_vazia.status_code == 200
+    assert ativa_vazia.json() is None
+
+
+async def test_confirmar_bloco_substitui_execucao_existente(client: AsyncClient) -> None:
+    _, headers = await _criar_usuario_com_token(client)
+    cat_id = (await client.get("/categorias", headers=headers)).json()[0]["id"]
+
+    b = await client.post(
+        "/blocos",
+        headers=headers,
+        json={
+            "categoria_id": cat_id,
+            "titulo": "Bloco único",
+            "inicio": "2026-11-05T14:00:00Z",
+            "fim": "2026-11-05T15:00:00Z",
+        },
+    )
+    bloco_id = b.json()["id"]
+
+    c1 = await client.post(
+        "/execucoes/confirmar-bloco",
+        headers=headers,
+        json={"bloco_id": bloco_id, "status": "concluida"},
+    )
+    assert c1.status_code == 200
+    exec_id = c1.json()["id"]
+    assert c1.json()["segundos_liquidos"] == 3600
+
+    # Segundo toque atualiza a mesma execução em vez de duplicar
+    c2 = await client.post(
+        "/execucoes/confirmar-bloco",
+        headers=headers,
+        json={"bloco_id": bloco_id, "status": "pulada"},
+    )
+    assert c2.status_code == 200
+    assert c2.json()["id"] == exec_id
+    assert c2.json()["status"] == "pulada"
+    assert c2.json()["segundos_liquidos"] == 0
