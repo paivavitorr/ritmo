@@ -422,6 +422,75 @@ async def test_resumo_calcula_aderencia_e_separa_espontaneo(client: AsyncClient)
     assert len(faixa["executados"]) == 2
 
 
+async def test_sync_batch_lww_cria_e_atualiza_bloco_offline(client: AsyncClient) -> None:
+    _, headers = await _criar_usuario_com_token(client)
+    cat_id = (await client.get("/categorias", headers=headers)).json()[0]["id"]
+
+    bloco_offline_id = str(uuid4())
+    mutacao1_id = str(uuid4())
+
+    # 1. Enviar mutação offline de criação
+    sync_resp = await client.post(
+        "/sync/batch",
+        headers=headers,
+        json={
+            "mutacoes": [
+                {
+                    "id": mutacao1_id,
+                    "entidade": "bloco",
+                    "acao": "criar",
+                    "entidade_id": bloco_offline_id,
+                    "payload": {
+                        "categoria_id": cat_id,
+                        "titulo": "Treino Matinal Criado Offline",
+                        "inicio": "2026-11-07T07:00:00Z",
+                        "fim": "2026-11-07T08:00:00Z",
+                        "data_local": "2026-11-07",
+                    },
+                    "criado_em": "2026-11-07T06:50:00Z",
+                }
+            ]
+        },
+    )
+    assert sync_resp.status_code == 200
+    res1 = sync_resp.json()
+    assert res1["processadas"] == 1
+    assert res1["resultados"][0]["status"] == "aplicado"
+
+    # Verificar que o bloco agora existe no servidor
+    get_bloco = await client.get(f"/blocos/{bloco_offline_id}", headers=headers)
+    assert get_bloco.status_code == 200
+    assert get_bloco.json()["titulo"] == "Treino Matinal Criado Offline"
+
+    # 2. Enviar mutação de atualização LWW
+    mutacao2_id = str(uuid4())
+    sync_update = await client.post(
+        "/sync/batch",
+        headers=headers,
+        json={
+            "mutacoes": [
+                {
+                    "id": mutacao2_id,
+                    "entidade": "bloco",
+                    "acao": "atualizar",
+                    "entidade_id": bloco_offline_id,
+                    "payload": {
+                        "titulo": "Treino Matinal Editado Offline",
+                    },
+                    "criado_em": "2026-11-07T07:05:00Z",
+                }
+            ]
+        },
+    )
+    assert sync_update.status_code == 200
+    res2 = sync_update.json()
+    assert res2["resultados"][0]["status"] == "aplicado", res2["resultados"][0]
+
+    get_atualizado = await client.get(f"/blocos/{bloco_offline_id}", headers=headers)
+    assert get_atualizado.status_code == 200
+    assert get_atualizado.json()["titulo"] == "Treino Matinal Editado Offline"
+
+
 async def test_confirmar_bloco_substitui_execucao_existente(client: AsyncClient) -> None:
     _, headers = await _criar_usuario_com_token(client)
     cat_id = (await client.get("/categorias", headers=headers)).json()[0]["id"]

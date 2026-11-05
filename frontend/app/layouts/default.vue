@@ -2,8 +2,13 @@
 const route = useRoute()
 const auth = useAuthStore()
 const conexao = useConexaoStore()
+const syncStore = useSyncStore()
 
-onMounted(conexao.verificar)
+onMounted(() => {
+  conexao.iniciarMonitoramento()
+  conexao.verificar()
+  syncStore.atualizarContadorPendencias()
+})
 
 const itensNavegacao = [
   { para: '/', rotulo: 'Hoje', descricao: 'Régua diária' },
@@ -36,13 +41,20 @@ function rotaAtiva(caminho: string): boolean {
           </NuxtLink>
           <span
             class="inline-flex items-center gap-1.5 text-xs text-grafite-suave"
-            :title="conexao.api === 'ok' ? 'Conectado à API' : 'API indisponível'"
+            :title="conexao.api === 'ok' ? 'Conectado à API' : 'API indisponível (modo offline)'"
           >
             <span
               class="h-2 w-2 rounded-full"
               :class="conexao.api === 'ok' ? 'bg-salvia-700' : 'bg-manteiga-700'"
             />
             {{ conexao.api === 'ok' ? 'Online' : 'Offline' }}
+            <span
+              v-if="syncStore.pendenciasCount > 0"
+              class="tabular text-[10px] font-semibold text-ardosia-700"
+              :title="`${syncStore.pendenciasCount} alteração(ões) pendente(s) de sincronização`"
+            >
+              ({{ syncStore.pendenciasCount }})
+            </span>
           </span>
         </div>
 
@@ -101,6 +113,12 @@ function rotaAtiva(caminho: string): boolean {
               :class="conexao.api === 'ok' ? 'bg-salvia-700' : 'bg-manteiga-700'"
             />
             {{ conexao.api === 'ok' ? 'Online' : 'Offline' }}
+            <span
+              v-if="syncStore.pendenciasCount > 0"
+              class="tabular text-[10px] font-semibold text-ardosia-700"
+            >
+              ({{ syncStore.pendenciasCount }})
+            </span>
           </span>
         </div>
       </header>

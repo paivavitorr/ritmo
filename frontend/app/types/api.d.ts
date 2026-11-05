@@ -433,6 +433,23 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/sync/batch': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Sincronizar Mutacoes */
+    post: operations['sincronizar_mutacoes_sync_batch_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -846,6 +863,55 @@ export interface components {
       /** Detail */
       detail?: components['schemas']['ValidationError'][]
     }
+    /** ItemMutacaoSync */
+    ItemMutacaoSync: {
+      /**
+             * Id
+             * Format: uuid
+             */
+      id: string
+      /**
+             * Entidade
+             * @enum {string}
+             */
+      entidade: 'bloco' | 'categoria' | 'execucao' | 'modelo_bloco'
+      /**
+             * Acao
+             * @enum {string}
+             */
+      acao: 'criar' | 'atualizar' | 'excluir'
+      /**
+             * Entidade Id
+             * Format: uuid
+             */
+      entidade_id: string
+      /** Payload */
+      payload?: {
+        [key: string]: unknown
+      }
+      /**
+             * Criado Em
+             * Format: date-time
+             */
+      criado_em: string
+    }
+    /** ItemResultadoSync */
+    ItemResultadoSync: {
+      /**
+             * Mutacao Id
+             * Format: uuid
+             */
+      mutacao_id: string
+      /**
+             * Status
+             * @enum {string}
+             */
+      status: 'aplicado' | 'ignorado' | 'erro'
+      /** Mensagem */
+      mensagem?: string | null
+      /** Versao Servidor */
+      versao_servidor?: number | null
+    }
     /** LoginRequest */
     LoginRequest: {
       /**
@@ -1075,6 +1141,18 @@ export interface components {
              * @constant
              */
       status: 'ok'
+    }
+    /** SyncBatchRequest */
+    SyncBatchRequest: {
+      /** Mutacoes */
+      mutacoes?: components['schemas']['ItemMutacaoSync'][]
+    }
+    /** SyncBatchResponse */
+    SyncBatchResponse: {
+      /** Processadas */
+      processadas: number
+      /** Resultados */
+      resultados: components['schemas']['ItemResultadoSync'][]
     }
     /** TokenResponse */
     TokenResponse: {
@@ -2237,6 +2315,39 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['ResumoPeriodoResponse']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  sincronizar_mutacoes_sync_batch_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SyncBatchRequest']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SyncBatchResponse']
         }
       }
       /** @description Validation Error */

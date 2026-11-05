@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import type { components } from '~/types/api'
+import { dbLocal } from '~/utils/dbLocal'
 
 export type BlocoRead = components['schemas']['BlocoRead']
 export type TipoBloco = components['schemas']['BlocoCreate']['tipo']
@@ -98,12 +99,63 @@ export const useBlocosStore = defineStore('blocos', () => {
 
   async function criarBloco(dados: BlocoCreate): Promise<BlocoRead> {
     const { requisitar } = useApi()
-    const criado = await requisitar<BlocoRead>('/blocos', {
-      method: 'POST',
-      body: dados as unknown as Record<string, unknown>,
-    })
-    _inserirOuAtualizarNaMemoria(criado)
-    return criado
+    const syncStore = useSyncStore()
+    const idLocal = dados.id ?? crypto.randomUUID()
+    const payloadCompleto = { ...dados, id: idLocal }
+
+    try {
+      const criado = await requisitar<BlocoRead>('/blocos', {
+        method: 'POST',
+        body: payloadCompleto as unknown as Record<string, unknown>,
+      })
+      _inserirOuAtualizarNaMemoria(criado)
+      void dbLocal.blocos.put(criado)
+      return criado
+    }
+    catch (erro) {
+      // Se a API estiver inacessível ou falhar conexão, armazena localmente e enfileira na outbox
+      const conexao = useConexaoStore()
+      const ehErroRede = !navigator.onLine || conexao.api === 'indisponivel' || (erro instanceof Error && erro.message.includes('fetch'))
+      if (ehErroRede) {
+        conexao.api = 'indisponivel'
+        const blocoSimulado: BlocoRead = {
+          id: idLocal,
+          usuario_id: 'offline',
+          categoria_id: dados.categoria_id,
+          modelo_bloco_id: null,
+          tipo: dados.tipo ?? 'rotina',
+          titulo: dados.titulo,
+          notas: dados.notas ?? null,
+          data_local: dados.data_local ?? dados.inicio.split('T')[0] ?? '2026-11-05',
+          inicio: dados.inicio,
+          fim: dados.fim,
+          desvinculado: false,
+          pausas_planejadas: (dados.pausas ?? []).map(p => ({
+            id: p.id ?? crypto.randomUUID(),
+            bloco_id: idLocal,
+            inicio: p.inicio,
+            fim: p.fim,
+          })),
+          segundos_liquidos_planejados: Math.max(
+            0,
+            Math.floor((new Date(dados.fim).getTime() - new Date(dados.inicio).getTime()) / 1000),
+          ),
+          versao: 1,
+          criado_em: new Date().toISOString(),
+          atualizado_em: new Date().toISOString(),
+        }
+        _inserirOuAtualizarNaMemoria(blocoSimulado)
+        await dbLocal.blocos.put(blocoSimulado)
+        await syncStore.enfileirarMutacao(
+          'bloco',
+          'criar',
+          idLocal,
+          payloadCompleto as Record<string, unknown>,
+        )
+        return blocoSimulado
+      }
+      throw erro
+    }
   }
 
   async function atualizarBloco(
