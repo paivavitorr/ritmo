@@ -10,7 +10,8 @@
     "postinstall": "nuxt prepare",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "typecheck": "nuxt typecheck"
+    "typecheck": "nuxt typecheck",
+    "test": "vitest run"
   },
   "dependencies": {
     "@nuxt/fonts": "^1.2.0",
@@ -27,10 +28,14 @@
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.17.0",
+    "@nuxt/test-utils": "^4.3.4",
     "@types/uuid": "^11.0.0",
+    "@vue/test-utils": "^2.5.1",
     "eslint": "^10.14.0",
+    "happy-dom": "^21.0.4",
     "openapi-typescript": "^7.13.0",
     "typescript": "^6.0.3",
+    "vitest": "^5.1.0",
     "vue-tsc": "^3.3.14"
   },
   "packageManager": "pnpm@11.24.0"

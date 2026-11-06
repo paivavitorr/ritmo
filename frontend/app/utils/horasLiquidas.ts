@@ -12,8 +12,30 @@ export interface PosicaoBlocoLayout {
 }
 
 /**
+ * Ordena e funde intervalos que se tocam ou se sobrepõem. Não muta a entrada.
+ */
+export function mesclarIntervalos(intervalos: IntervaloMinutos[]): IntervaloMinutos[] {
+  const ordenados = intervalos
+    .filter(i => i.fimMin > i.inicioMin)
+    .sort((a, b) => a.inicioMin - b.inicioMin || a.fimMin - b.fimMin)
+  const unidos: IntervaloMinutos[] = []
+  for (const atual of ordenados) {
+    const ultimo = unidos[unidos.length - 1]
+    if (ultimo && atual.inicioMin <= ultimo.fimMin) {
+      if (atual.fimMin > ultimo.fimMin) {
+        unidos[unidos.length - 1] = { inicioMin: ultimo.inicioMin, fimMin: atual.fimMin }
+      }
+    }
+    else {
+      unidos.push({ ...atual })
+    }
+  }
+  return unidos
+}
+
+/**
  * Mescla intervalos de pausa sobrepostos e calcula os minutos líquidos planejados
- * dentro de `[inicioMin, fimMin)`.
+ * dentro de `[inicioMin, fimMin)`. Pausas fora do intervalo são recortadas/ignoradas.
  */
 export function calcularMinutosLiquidos(
   inicioMin: number,
@@ -23,35 +45,14 @@ export function calcularMinutosLiquidos(
   const duracaoBruta = Math.max(0, fimMin - inicioMin)
   if (duracaoBruta === 0 || pausas.length === 0) return duracaoBruta
 
-  const recortadas: IntervaloMinutos[] = []
-  for (const p of pausas) {
-    const ini = Math.max(inicioMin, p.inicioMin)
-    const fim = Math.min(fimMin, p.fimMin)
-    if (fim > ini) {
-      recortadas.push({ inicioMin: ini, fimMin: fim })
-    }
-  }
-  if (recortadas.length === 0) return duracaoBruta
-
-  recortadas.sort((a, b) => a.inicioMin - b.inicioMin || a.fimMin - b.fimMin)
-  const unidas: IntervaloMinutos[] = [recortadas[0]!]
-  for (let i = 1; i < recortadas.length; i++) {
-    const atual = recortadas[i]!
-    const ultimo = unidas[unidas.length - 1]!
-    if (atual.inicioMin <= ultimo.fimMin) {
-      if (atual.fimMin > ultimo.fimMin) {
-        unidas[unidas.length - 1] = {
-          inicioMin: ultimo.inicioMin,
-          fimMin: atual.fimMin,
-        }
-      }
-    }
-    else {
-      unidas.push(atual)
-    }
-  }
-
-  const totalPausas = unidas.reduce((acc, p) => acc + (p.fimMin - p.inicioMin), 0)
+  const recortadas = pausas.map(p => ({
+    inicioMin: Math.max(inicioMin, p.inicioMin),
+    fimMin: Math.min(fimMin, p.fimMin),
+  }))
+  const totalPausas = mesclarIntervalos(recortadas).reduce(
+    (acc, p) => acc + (p.fimMin - p.inicioMin),
+    0,
+  )
   return Math.max(0, duracaoBruta - totalPausas)
 }
 
