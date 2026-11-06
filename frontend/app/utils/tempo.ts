@@ -18,11 +18,24 @@ export const NOMES_DIAS_CURTOS = [
   'Sáb',
 ] as const
 
+const cacheFormatadores = new Map<string, Intl.DateTimeFormat>()
+
+/** Reaproveita `Intl.DateTimeFormat` por locale + opções (a criação é cara). */
+function obterFormatador(locale: string, opcoes: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const chave = `${locale}|${JSON.stringify(opcoes)}`
+  let formatador = cacheFormatadores.get(chave)
+  if (!formatador) {
+    formatador = new Intl.DateTimeFormat(locale, opcoes)
+    cacheFormatadores.set(chave, formatador)
+  }
+  return formatador
+}
+
 /**
  * Formata um Date para `YYYY-MM-DD` no fuso IANA informado.
  */
 export function dataIsoNoFuso(instante: Date, fuso: string): string {
-  const partes = new Intl.DateTimeFormat('en-CA', {
+  const partes = obterFormatador('en-CA', {
     timeZone: fuso,
     year: 'numeric',
     month: '2-digit',
@@ -70,6 +83,43 @@ export function inicioDaSemanaIso(dataIso: string, inicioSemana = 1): string {
   return somarDiasIso(dataIso, -diff)
 }
 
+interface ParteRelogio {
+  /** Relógio de parede do fuso, expresso como ms "UTC" (ano/mês/dia/hora/minuto). */
+  paredeMs: number
+  ano: number
+  mes: number
+  dia: number
+  hora: number
+  minuto: number
+}
+
+function relogioNoFuso(instanteMs: number, fuso: string): ParteRelogio {
+  const partes = obterFormatador('en-US', {
+    timeZone: fuso,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(instanteMs))
+
+  const valor = (tipo: string, padrao: number) =>
+    Number(partes.find(p => p.type === tipo)?.value ?? padrao)
+  const ano = valor('year', 2026)
+  const mes = valor('month', 1)
+  const dia = valor('day', 1)
+  const hora = valor('hour', 0) % 24
+  const minuto = valor('minute', 0)
+  return { paredeMs: Date.UTC(ano, mes - 1, dia, hora, minuto), ano, mes, dia, hora, minuto }
+}
+
+/** Offset do fuso (minutos, `parede - UTC`) no instante informado. */
+function offsetMinutosNoFuso(instanteMs: number, fuso: string): number {
+  const minutoUtcMs = Math.floor(instanteMs / 60_000) * 60_000
+  return (relogioNoFuso(instanteMs, fuso).paredeMs - minutoUtcMs) / 60_000
+}
+
 /**
  * Retorna os minutos desde `00:00` de `dataReferenciaIso` no fuso informado para um timestamp ISO.
  */
@@ -78,23 +128,7 @@ export function minutosDesdeMeiaNoiteNoFuso(
   dataReferenciaIso: string,
   fuso: string,
 ): number {
-  const dt = new Date(isoTimestamp)
-  const partes = new Intl.DateTimeFormat('en-US', {
-    timeZone: fuso,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(dt)
-
-  const ano = Number(partes.find(p => p.type === 'year')?.value ?? 2026)
-  const mes = Number(partes.find(p => p.type === 'month')?.value ?? 1)
-  const dia = Number(partes.find(p => p.type === 'day')?.value ?? 1)
-  const horaBruta = Number(partes.find(p => p.type === 'hour')?.value ?? 0)
-  const hora = horaBruta === 24 ? 0 : horaBruta
-  const minuto = Number(partes.find(p => p.type === 'minute')?.value ?? 0)
+  const { ano, mes, dia, hora, minuto } = relogioNoFuso(new Date(isoTimestamp).getTime(), fuso)
 
   const [refAno = 2026, refMes = 1, refDia = 1] = dataReferenciaIso.split('-').map(Number)
   const utcData = Date.UTC(ano, mes - 1, dia)
@@ -107,6 +141,13 @@ export function minutosDesdeMeiaNoiteNoFuso(
 /**
  * Converte `(dataIso, minutosDesdeMeiaNoite)` no fuso IANA do usuário para string ISO UTC (`...Z`).
  * Suporta `minutosDesdeMeiaNoite >= 1440` (quando o fim do bloco cruza a meia-noite).
+ *
+ * Horário de verão:
+ * - Horário ambíguo (relógio atrasa, ex.: America/New_York 2026-11-01 01:30): escolhe a
+ *   primeira ocorrência (offset de verão, instante mais cedo).
+ * - Horário inexistente (relógio adianta, ex.: America/New_York 2026-03-08 02:30 ou
+ *   America/Sao_Paulo 2018-11-04 00:00): usa o offset anterior à transição, o que
+ *   empurra o horário para frente (03:30 e 01:00, respectivamente).
  */
 export function criarTimestampUtcDeMinutosLocais(
   dataIso: string,
@@ -120,16 +161,18 @@ export function criarTimestampUtcDeMinutosLocais(
   const dataAlvo = diasExtras !== 0 ? somarDiasIso(dataIso, diasExtras) : dataIso
   const [ano = 2026, mes = 1, dia = 1] = dataAlvo.split('-').map(Number)
 
-  // Chute inicial assumindo UTC e ajuste pelo offset real do fuso naquele instante
-  const chuteUtcMs = Date.UTC(ano, mes - 1, dia, hora, minuto, 0)
-  const minNoFusoDoChute = minutosDesdeMeiaNoiteNoFuso(
-    new Date(chuteUtcMs).toISOString(),
-    dataAlvo,
-    fuso,
-  )
-  const erroMinutos = minNoFusoDoChute - (hora * 60 + minuto)
-  const ajustadoMs = chuteUtcMs - erroMinutos * 60_000
-  return new Date(ajustadoMs).toISOString()
+  // Relógio de parede desejado tratado como UTC; subtrair o offset real dá o instante.
+  const paredeMs = Date.UTC(ano, mes - 1, dia, hora, minuto, 0)
+  const offsetAntes = offsetMinutosNoFuso(paredeMs - 86_400_000, fuso)
+  const offsetDepois = offsetMinutosNoFuso(paredeMs + 86_400_000, fuso)
+
+  const candidatos = [...new Set([offsetAntes, offsetDepois])]
+    .map(offset => paredeMs - offset * 60_000)
+    .filter(ms => relogioNoFuso(ms, fuso).paredeMs === paredeMs)
+    .sort((a, b) => a - b)
+
+  const instanteMs = candidatos[0] ?? paredeMs - offsetAntes * 60_000
+  return new Date(instanteMs).toISOString()
 }
 
 export function minutosParaHoraInput(minutos: number): string {
@@ -147,6 +190,19 @@ export function horaInputParaMinutos(valor: string): number {
   return Math.max(0, Math.min(1439, h * 60 + m))
 }
 
+/**
+ * Soma `delta` minutos a um horário `HH:MM` de campo de início (0 a 23:55) ou de fim
+ * (5 min a 24:00, exibido como `00:00`). Zero em `fim` com delta negativo vale 24:00.
+ */
+export function ajustarHorarioInput(valor: string, campo: 'inicio' | 'fim', delta: number): string {
+  const bruto = horaInputParaMinutos(valor)
+  if (campo === 'inicio') {
+    return minutosParaHoraInput(Math.max(0, Math.min(1435, bruto + delta)))
+  }
+  const atual = bruto === 0 && delta < 0 ? 1440 : bruto
+  return minutosParaHoraInput(Math.max(5, Math.min(1440, atual + delta)))
+}
+
 export function arredondarParaStep(minutos: number, step = 15): number {
   return Math.round(minutos / step) * step
 }
@@ -154,7 +210,7 @@ export function arredondarParaStep(minutos: number, step = 15): number {
 export function formatarDataCabecalho(dataIso: string): string {
   const [ano = 2026, mes = 1, dia = 1] = dataIso.split('-').map(Number)
   const dt = new Date(Date.UTC(ano, mes - 1, dia, 12, 0, 0))
-  return new Intl.DateTimeFormat('pt-BR', {
+  return obterFormatador('pt-BR', {
     timeZone: 'UTC',
     weekday: 'long',
     day: 'numeric',
@@ -165,7 +221,7 @@ export function formatarDataCabecalho(dataIso: string): string {
 export function formatarDiaMesCurto(dataIso: string): string {
   const [ano = 2026, mes = 1, dia = 1] = dataIso.split('-').map(Number)
   const dt = new Date(Date.UTC(ano, mes - 1, dia, 12, 0, 0))
-  return new Intl.DateTimeFormat('pt-BR', {
+  return obterFormatador('pt-BR', {
     timeZone: 'UTC',
     day: '2-digit',
     month: '2-digit',
