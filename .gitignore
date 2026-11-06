@@ -21,3 +21,6 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Arquivos locais de ferramentas
+.claude/worktrees/

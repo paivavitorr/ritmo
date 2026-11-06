@@ -23,7 +23,12 @@ from app.routers.blocos import serializar_bloco
 from app.schemas.bloco import BlocoCreate, BlocoUpdate
 from app.schemas.categoria import CategoriaCreate, CategoriaRead, CategoriaUpdate
 from app.schemas.execucao import ExecucaoRead
-from app.schemas.modelo_semana import ModeloBlocoRead
+from app.schemas.modelo_semana import (
+    ModeloBlocoCreate,
+    ModeloBlocoRead,
+    ModeloBlocoUpdate,
+    _duracao_minutos_modelo,
+)
 from app.schemas.sync import (
     ExcluidoSync,
     ExecucaoSyncCreate,
@@ -380,6 +385,71 @@ async def _processar_execucao(
     return _resultado(m, "aplicado", versao=execucao.versao)
 
 
+# --- Modelo de bloco ------------------------------------------------------------------------
+# Só o cadastro do modelo trafega pelo sync; materializar blocos na semana continua via REST.
+
+
+async def _processar_modelo_bloco(
+    m: ItemMutacaoSync, usuario: Usuario, session: SessionDep, repo: SyncRepository
+) -> ItemResultadoSync:
+    modelo = await repo.obter(ModeloBloco, m.entidade_id)
+
+    if m.acao == "excluir":
+        antecipado = _pre_excluir(m, modelo)
+        if antecipado is not None or modelo is None:
+            return antecipado or _resultado(m, "ignorado")
+        _marcar_excluida(modelo)
+        return _resultado(m, "aplicado", versao=modelo.versao)
+
+    if m.acao == "criar":
+        if modelo is not None:
+            return _resultado(m, "aplicado", "Já existente", modelo.versao)
+        if await repo.id_pertence_a_outro_usuario(ModeloBloco, m.entidade_id):
+            raise _MutacaoRejeitada(MSG_REFERENCIA_INVALIDA)
+        dados = _validar(ModeloBlocoCreate, m.payload)
+        await _garantir_categoria(session, usuario, dados.categoria_id)
+        novo = ModeloBloco(
+            id=m.entidade_id,
+            usuario_id=usuario.id,
+            categoria_id=dados.categoria_id,
+            titulo=dados.titulo,
+            dia_semana=dados.dia_semana,
+            hora_inicio=dados.hora_inicio,
+            hora_fim=dados.hora_fim,
+            pausas=[p.model_dump() for p in dados.pausas],
+            lembretes=list(dados.lembretes),
+            ativo=dados.ativo,
+        )
+        session.add(novo)
+        await session.flush()
+        return _resultado(m, "aplicado", versao=novo.versao)
+
+    antecipado = _pre_atualizar(
+        m,
+        modelo,
+        ModeloBlocoRead.model_validate(modelo).model_dump(mode="json") if modelo else None,
+    )
+    if antecipado is not None or modelo is None:
+        return antecipado or _resultado(m, "ignorado")
+    dados_up = _validar(ModeloBlocoUpdate, m.payload)
+    campos = dados_up.model_dump(exclude_unset=True)
+    if "categoria_id" in campos:
+        await _garantir_categoria(session, usuario, campos["categoria_id"])
+
+    hora_ini = dados_up.hora_inicio or modelo.hora_inicio
+    hora_fim = dados_up.hora_fim or modelo.hora_fim
+    pausas = campos.get("pausas", modelo.pausas)
+    duracao_total = _duracao_minutos_modelo(hora_ini, hora_fim)
+    if any(int(p["offset_min"]) + int(p["duracao_min"]) > duracao_total for p in pausas):
+        raise _MutacaoRejeitada("A pausa do modelo excede a duração total do bloco")
+
+    for campo, valor in campos.items():
+        setattr(modelo, campo, valor)
+    modelo.versao += 1
+    await session.flush()
+    return _resultado(m, "aplicado", versao=modelo.versao)
+
+
 async def _processar_mutacao(
     m: ItemMutacaoSync, usuario: Usuario, session: SessionDep
 ) -> ItemResultadoSync:
@@ -390,8 +460,7 @@ async def _processar_mutacao(
         return await _processar_categoria(m, usuario, session, repo)
     if m.entidade == "execucao":
         return await _processar_execucao(m, usuario, session, repo)
-    # Modelos semanais são geridos apenas via REST (materialização de blocos no servidor).
-    return _resultado(m, "ignorado", "Entidade não suportada")
+    return await _processar_modelo_bloco(m, usuario, session, repo)
 
 
 @router.post("/batch", response_model=SyncBatchResponse)

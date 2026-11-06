@@ -3,6 +3,7 @@ const route = useRoute()
 const auth = useAuthStore()
 const conexao = useConexaoStore()
 const syncStore = useSyncStore()
+const painelSyncAberto = ref(false)
 
 onMounted(() => {
   conexao.iniciarMonitoramento()
@@ -39,24 +40,7 @@ function rotaAtiva(caminho: string): boolean {
           >
             Ritmo
           </NuxtLink>
-          <!-- IndicadorSync: plugar na integração -->
-          <span
-            class="inline-flex items-center gap-1.5 text-xs text-grafite-suave"
-            :title="conexao.api === 'ok' ? 'Conectado à API' : 'API indisponível (modo offline)'"
-          >
-            <span
-              class="h-2 w-2 rounded-full"
-              :class="conexao.api === 'ok' ? 'bg-salvia-700' : 'bg-manteiga-700'"
-            />
-            {{ conexao.api === 'ok' ? 'Online' : 'Offline' }}
-            <span
-              v-if="syncStore.pendenciasCount > 0"
-              class="tabular text-[10px] font-semibold text-ardosia-700"
-              :title="`${syncStore.pendenciasCount} alteração(ões) pendente(s) de sincronização`"
-            >
-              ({{ syncStore.pendenciasCount }})
-            </span>
-          </span>
+          <SyncIndicadorSync @abrir="painelSyncAberto = true" />
         </div>
 
         <nav class="mt-8 flex flex-col gap-1">
@@ -108,20 +92,7 @@ function rotaAtiva(caminho: string): boolean {
           Ritmo
         </NuxtLink>
         <div class="flex items-center gap-3">
-          <!-- IndicadorSync: plugar na integração -->
-          <span class="inline-flex items-center gap-1.5 text-xs text-grafite-suave">
-            <span
-              class="h-2 w-2 rounded-full"
-              :class="conexao.api === 'ok' ? 'bg-salvia-700' : 'bg-manteiga-700'"
-            />
-            {{ conexao.api === 'ok' ? 'Online' : 'Offline' }}
-            <span
-              v-if="syncStore.pendenciasCount > 0"
-              class="tabular text-[10px] font-semibold text-ardosia-700"
-            >
-              ({{ syncStore.pendenciasCount }})
-            </span>
-          </span>
+          <SyncIndicadorSync @abrir="painelSyncAberto = true" />
         </div>
       </header>
 
@@ -149,5 +120,13 @@ function rotaAtiva(caminho: string): boolean {
         <span>{{ item.rotulo }}</span>
       </NuxtLink>
     </nav>
+
+    <BaseSheet
+      :aberto="painelSyncAberto"
+      titulo="Sincronização"
+      @fechar="painelSyncAberto = false"
+    >
+      <SyncPainelPendencias @fechar="painelSyncAberto = false" />
+    </BaseSheet>
   </div>
 </template>
