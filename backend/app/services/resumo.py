@@ -1,4 +1,5 @@
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from uuid import UUID
@@ -13,6 +14,7 @@ from app.schemas.resumo import (
     FaixaDia,
     FaixaIntervalo,
     ResumoPeriodoResponse,
+    SemanaResumo,
 )
 from app.services.aderencia import (
     BlocoAderenciaInput,
@@ -21,10 +23,16 @@ from app.services.aderencia import (
 )
 from app.services.horas_liquidas import (
     Intervalo,
+    fatiar_por_dia_no_fuso,
     mesclar_intervalos,
     recortar_intervalos,
     segundos_liquidos,
 )
+
+COR_PADRAO = "ardosia"
+NOME_PADRAO = "Geral"
+
+ChaveCatDia = tuple[UUID, date]
 
 
 def quebrar_intervalo_por_dias(
@@ -53,232 +61,300 @@ def quebrar_intervalo_por_dias(
     return fatias
 
 
+def inicio_da_semana(dia: date, inicio_semana: int = 1) -> date:
+    """Primeiro dia da semana de `dia`. `inicio_semana`: 0=domingo .. 6=sábado (padrão 1=segunda).
+
+    Mesma convenção de `inicioDaSemanaIso` no frontend.
+    """
+    dia_semana = (dia.weekday() + 1) % 7
+    return dia - timedelta(days=(dia_semana - inicio_semana) % 7)
+
+
+def _fim_efetivo(execucao: Execucao, agora: datetime) -> datetime:
+    return garantir_utc(execucao.fim) if execucao.fim is not None else agora
+
+
+def _intervalos_liquidos_execucao(execucao: Execucao, agora: datetime) -> list[Intervalo]:
+    """Intervalos líquidos reais (sem pausas) de uma execução; abertas terminam em `agora`."""
+    fim = _fim_efetivo(execucao, agora)
+    inicio = garantir_utc(execucao.inicio)
+    if fim <= inicio:
+        return []
+    pausas: list[Intervalo] = []
+    for p in execucao.pausas:
+        p_ini = garantir_utc(p.inicio)
+        p_fim = garantir_utc(p.fim) if p.fim is not None else fim
+        if p_fim > p_ini:
+            pausas.append(Intervalo(p_ini, p_fim))
+    return recortar_intervalos(Intervalo(inicio, fim), pausas)
+
+
+def _segundos_por_grupo(
+    grupos: dict[ChaveCatDia, list[Intervalo]],
+) -> dict[ChaveCatDia, int]:
+    return {
+        chave: sum(iv.segundos for iv in mesclar_intervalos(ivs)) for chave, ivs in grupos.items()
+    }
+
+
+def _faixa_intervalo(
+    tipo: Literal["planejado", "executado"],
+    inicio: datetime,
+    fim: datetime,
+    categoria_id: UUID,
+    mapa_cats: dict[UUID, Categoria],
+    titulo: str | None,
+    status: str | None,
+) -> FaixaIntervalo:
+    cat = mapa_cats.get(categoria_id)
+    nome = cat.nome if cat else NOME_PADRAO
+    return FaixaIntervalo(
+        inicio_iso=inicio.isoformat(),
+        fim_iso=fim.isoformat(),
+        tipo=tipo,
+        categoria_id=categoria_id,
+        categoria_nome=nome,
+        categoria_cor=cat.cor if cat else COR_PADRAO,
+        titulo=titulo if titulo is not None else nome,
+        status=status,
+    )
+
+
 def calcular_resumo_periodo(
     de: date,
     ate: date,
     fuso_str: str,
     agrupamento: Literal["dia", "semana"],
-    categorias: list[Categoria],
-    blocos: list[Bloco],
-    execucoes: list[Execucao],
+    categorias: Sequence[Categoria],
+    blocos: Sequence[Bloco],
+    execucoes: Sequence[Execucao],
+    agora: datetime,
+    inicio_semana: int = 1,
 ) -> ResumoPeriodoResponse:
+    """Calcula o resumo de `[de, ate]` (datas locais no fuso do usuário). Função pura.
+
+    - Blocos e execuções são fatiados na meia-noite local; só entram as fatias dentro do período.
+    - Horas executadas vão para `execucao.categoria_id`, pelo intervalo real da execução
+      (independente de o bloco vinculado estar no período ou ter sido excluído).
+    - Execuções sem bloco viram linhas "espontâneas" da própria categoria.
+    - Aderência é `None` quando nada foi planejado.
+    """
+    agora = garantir_utc(agora)
     mapa_cats = {c.id: c for c in categorias}
 
-    # Indexar execuções por bloco_id para cálculo de aderência temporal bloco a bloco
-    execs_por_bloco: dict[UUID, list[Execucao]] = defaultdict(list)
-    execs_avulsas: list[Execucao] = []
+    def no_periodo(dia: date) -> bool:
+        return de <= dia <= ate
+
+    # 1. Execuções: intervalos líquidos por bloco e por (categoria, dia)
+    liquidos_por_bloco: dict[UUID, list[Intervalo]] = defaultdict(list)
+    vinculadas: dict[ChaveCatDia, list[Intervalo]] = defaultdict(list)
+    avulsas: dict[ChaveCatDia, list[Intervalo]] = defaultdict(list)
 
     for ex in execucoes:
         if ex.status == "pulada":
             continue
+        liquidos = _intervalos_liquidos_execucao(ex, agora)
+        if not liquidos:
+            continue
         if ex.bloco_id is not None:
-            execs_por_bloco[ex.bloco_id].append(ex)
-        else:
-            execs_avulsas.append(ex)
+            liquidos_por_bloco[ex.bloco_id].extend(liquidos)
+        destino = vinculadas if ex.bloco_id is not None else avulsas
+        for dia, fatias in fatiar_por_dia_no_fuso(liquidos, fuso_str).items():
+            if no_periodo(dia):
+                destino[(ex.categoria_id, dia)].extend(fatias)
 
-    # 1. Agrupamento por Categoria e por Dia
-    segundos_plan_por_cat: dict[UUID, int] = defaultdict(int)
-    segundos_exec_planejado_por_cat: dict[UUID, int] = defaultdict(int)
-    segundos_plan_por_dia: dict[date, int] = defaultdict(int)
-    segundos_exec_por_dia: dict[date, int] = defaultdict(int)
-    segundos_exec_avulso_total = 0
+    exec_vinculada = _segundos_por_grupo(vinculadas)
+    exec_avulsa = _segundos_por_grupo(avulsas)
 
-    bloco_aderencia_inputs: list[BlocoAderenciaInput] = []
-    bloco_inputs_por_cat: dict[UUID, list[BlocoAderenciaInput]] = defaultdict(list)
-    bloco_inputs_por_dia: dict[date, list[BlocoAderenciaInput]] = defaultdict(list)
-
-    tz = ZoneInfo(fuso_str)
+    # 2. Blocos: planejado e insumos de aderência temporal por fatia diária
+    plano: dict[ChaveCatDia, int] = defaultdict(int)
+    inputs_todos: list[BlocoAderenciaInput] = []
+    inputs_por_cat: dict[UUID, list[BlocoAderenciaInput]] = defaultdict(list)
+    inputs_por_dia: dict[date, list[BlocoAderenciaInput]] = defaultdict(list)
 
     for b in blocos:
-        base_bloco = Intervalo(garantir_utc(b.inicio), garantir_utc(b.fim))
-        pausas_bloco = tuple(
+        base = Intervalo(garantir_utc(b.inicio), garantir_utc(b.fim))
+        pausas = tuple(
             Intervalo(garantir_utc(p.inicio), garantir_utc(p.fim))
             for p in b.pausas_planejadas
             if garantir_utc(p.fim) > garantir_utc(p.inicio)
         )
-        plan_liq = segundos_liquidos(base_bloco, list(pausas_bloco))
-        segundos_plan_por_cat[b.categoria_id] += plan_liq
-        data_local_bloco = garantir_utc(b.inicio).astimezone(tz).date()
-        segundos_plan_por_dia[data_local_bloco] += plan_liq
-
-        # Intervalos líquidos reais das execuções vinculadas a este bloco
-        ivs_exec_bloco: list[Intervalo] = []
-        for ex in execs_por_bloco.get(b.id, []):
-            fim_ex = ex.fim if ex.fim is not None else datetime.now(UTC)
-            if fim_ex <= ex.inicio:
+        execucao_bloco = tuple(liquidos_por_bloco.get(b.id, ()))
+        for dia, fatias in fatiar_por_dia_no_fuso([base], fuso_str).items():
+            if not no_periodo(dia):
                 continue
-            base_ex = Intervalo(garantir_utc(ex.inicio), garantir_utc(fim_ex))
-            pausas_ex = []
-            for p in ex.pausas:
-                p_fim = p.fim if p.fim is not None else fim_ex
-                if garantir_utc(p_fim) > garantir_utc(p.inicio):
-                    pausas_ex.append(Intervalo(garantir_utc(p.inicio), garantir_utc(p_fim)))
-            ivs_exec_bloco.extend(recortar_intervalos(base_ex, pausas_ex))
+            for fatia in fatias:
+                plano[(b.categoria_id, dia)] += segundos_liquidos(fatia, pausas)
+                inp = BlocoAderenciaInput(
+                    bloco=fatia,
+                    pausas_bloco=pausas,
+                    intervalos_execucao_liquidos=execucao_bloco,
+                )
+                inputs_todos.append(inp)
+                inputs_por_cat[b.categoria_id].append(inp)
+                inputs_por_dia[dia].append(inp)
 
-        # Segundos executados atribuídos a esta categoria via planejamento
-        segundos_exec_bloco = sum(iv.segundos for iv in mesclar_intervalos(ivs_exec_bloco))
-        segundos_exec_planejado_por_cat[b.categoria_id] += segundos_exec_bloco
-        segundos_exec_por_dia[data_local_bloco] += segundos_exec_bloco
+    # 3. Agregações por categoria e por dia
+    plan_cat: dict[UUID, int] = defaultdict(int)
+    plan_dia: dict[date, int] = defaultdict(int)
+    aderentes_cat: dict[UUID, int] = defaultdict(int)
+    aderentes_dia: dict[date, int] = defaultdict(int)
+    vinc_cat: dict[UUID, int] = defaultdict(int)
+    avul_cat: dict[UUID, int] = defaultdict(int)
+    exec_dia: dict[date, int] = defaultdict(int)
 
-        inp = BlocoAderenciaInput(
-            bloco=base_bloco,
-            pausas_bloco=pausas_bloco,
-            intervalos_execucao_liquidos=tuple(ivs_exec_bloco),
-        )
-        bloco_aderencia_inputs.append(inp)
-        bloco_inputs_por_cat[b.categoria_id].append(inp)
-        bloco_inputs_por_dia[data_local_bloco].append(inp)
+    for (cat_id, dia), seg in plano.items():
+        plan_cat[cat_id] += seg
+        plan_dia[dia] += seg
+        aderente = min(seg, exec_vinculada.get((cat_id, dia), 0))
+        aderentes_cat[cat_id] += aderente
+        aderentes_dia[dia] += aderente
+    for (cat_id, dia), seg in exec_vinculada.items():
+        vinc_cat[cat_id] += seg
+        exec_dia[dia] += seg
+    for (cat_id, dia), seg in exec_avulsa.items():
+        avul_cat[cat_id] += seg
+        exec_dia[dia] += seg
 
-    # Execuções avulsas (sem planejamento prévio)
-    for ex in execs_avulsas:
-        fim_ex = ex.fim if ex.fim is not None else datetime.now(UTC)
-        if fim_ex <= ex.inicio:
+    ids_ordenados: list[UUID] = [c.id for c in categorias]
+    vistos = set(ids_ordenados)
+    for cat_id in [*plan_cat, *vinc_cat, *avul_cat]:
+        if cat_id not in vistos:
+            vistos.add(cat_id)
+            ids_ordenados.append(cat_id)
+
+    linhas: list[CategoriaResumo] = []
+    for cat_id in ids_ordenados:
+        plan = plan_cat.get(cat_id, 0)
+        executado = vinc_cat.get(cat_id, 0)
+        if plan == 0 and executado == 0:
             continue
-        base_ex = Intervalo(garantir_utc(ex.inicio), garantir_utc(fim_ex))
-        pausas_ex = []
-        for p in ex.pausas:
-            p_fim = p.fim if p.fim is not None else fim_ex
-            if garantir_utc(p_fim) > garantir_utc(p.inicio):
-                pausas_ex.append(Intervalo(garantir_utc(p.inicio), garantir_utc(p_fim)))
-        liq_avulso = segundos_liquidos(base_ex, pausas_ex)
-        segundos_exec_avulso_total += liq_avulso
-        data_local_ex = garantir_utc(ex.inicio).astimezone(tz).date()
-        segundos_exec_por_dia[data_local_ex] += liq_avulso
-
-    lista_categorias_resumo: list[CategoriaResumo] = []
-    for cat in categorias:
-        plan = segundos_plan_por_cat[cat.id]
-        exec_plan = segundos_exec_planejado_por_cat[cat.id]
-        if plan == 0 and exec_plan == 0:
-            continue
-
-        taxa_vol = aderencia_volume(exec_plan, plan)
-        taxa_temp = (
-            aderencia_ponderada_dia(bloco_inputs_por_cat[cat.id])
-            if bloco_inputs_por_cat[cat.id]
-            else 1.0
-        )
-
-        lista_categorias_resumo.append(
+        cat = mapa_cats.get(cat_id)
+        linhas.append(
             CategoriaResumo(
-                categoria_id=cat.id,
-                nome=cat.nome,
-                cor=cat.cor,
-                conta_como_produtiva=cat.conta_como_produtiva,
+                categoria_id=cat_id,
+                nome=cat.nome if cat else NOME_PADRAO,
+                cor=cat.cor if cat else COR_PADRAO,
+                conta_como_produtiva=cat.conta_como_produtiva if cat else True,
                 segundos_planejados=plan,
-                segundos_executados=exec_plan,
-                segundos_liquidos_aderentes=min(exec_plan, plan),
-                aderencia_volume=taxa_vol,
-                aderencia_temporal=taxa_temp,
+                segundos_executados=executado,
+                segundos_liquidos_aderentes=aderentes_cat.get(cat_id, 0),
+                aderencia_volume=aderencia_volume(aderentes_cat.get(cat_id, 0), plan),
+                aderencia_temporal=aderencia_ponderada_dia(inputs_por_cat.get(cat_id, [])),
                 eh_espontaneo=False,
             )
         )
 
-    # Linha especial para avulsos/espontâneos (se houver)
-    if segundos_exec_avulso_total > 0:
-        lista_categorias_resumo.append(
+    for cat_id in ids_ordenados:
+        espontaneo = avul_cat.get(cat_id, 0)
+        if espontaneo <= 0:
+            continue
+        cat = mapa_cats.get(cat_id)
+        linhas.append(
             CategoriaResumo(
-                categoria_id=None,
-                nome="Sem planejamento / Espontâneo",
-                cor="ardosia",
-                conta_como_produtiva=True,
+                categoria_id=cat_id,
+                nome=f"{cat.nome if cat else NOME_PADRAO} (espontâneo)",
+                cor=cat.cor if cat else COR_PADRAO,
+                conta_como_produtiva=cat.conta_como_produtiva if cat else True,
                 segundos_planejados=0,
-                segundos_executados=segundos_exec_avulso_total,
-                segundos_liquidos_aderentes=segundos_exec_avulso_total,
-                aderencia_volume=1.0,
-                aderencia_temporal=1.0,
+                segundos_executados=espontaneo,
+                segundos_liquidos_aderentes=0,
+                aderencia_volume=None,
+                aderencia_temporal=None,
                 eh_espontaneo=True,
             )
         )
 
-    # 2. Faixa do Dia por data no fuso
+    # 4. Faixas por dia (planejado x executado)
     faixas_por_data: dict[date, tuple[list[FaixaIntervalo], list[FaixaIntervalo]]] = defaultdict(
         lambda: ([], [])
     )
-
     for b in blocos:
-        cat_opt = mapa_cats.get(b.categoria_id)
-        nome_cat = cat_opt.nome if cat_opt else "Geral"
-        cor_cat = cat_opt.cor if cat_opt else "ardosia"
-
-        fatias = quebrar_intervalo_por_dias(b.inicio, b.fim, fuso_str)
-        for d, ini_fat, fim_fat in fatias:
-            faixas_por_data[d][0].append(
-                FaixaIntervalo(
-                    inicio_iso=ini_fat.isoformat(),
-                    fim_iso=fim_fat.isoformat(),
-                    tipo="planejado",
-                    categoria_id=b.categoria_id,
-                    categoria_nome=nome_cat,
-                    categoria_cor=cor_cat,
-                    titulo=b.titulo,
-                    status=None,
+        for dia, ini_fat, fim_fat in quebrar_intervalo_por_dias(b.inicio, b.fim, fuso_str):
+            if no_periodo(dia):
+                faixas_por_data[dia][0].append(
+                    _faixa_intervalo(
+                        "planejado", ini_fat, fim_fat, b.categoria_id, mapa_cats, b.titulo, None
+                    )
                 )
-            )
-
     for ex in execucoes:
         if ex.status == "pulada":
             continue
-        cat_opt = mapa_cats.get(ex.categoria_id)
-        nome_cat = cat_opt.nome if cat_opt else "Geral"
-        cor_cat = cat_opt.cor if cat_opt else "ardosia"
-        fim_ex = ex.fim if ex.fim is not None else datetime.now(UTC)
-        if fim_ex <= ex.inicio:
-            continue
-
-        fatias = quebrar_intervalo_por_dias(ex.inicio, fim_ex, fuso_str)
-        for d, ini_fat, fim_fat in fatias:
-            faixas_por_data[d][1].append(
-                FaixaIntervalo(
-                    inicio_iso=ini_fat.isoformat(),
-                    fim_iso=fim_fat.isoformat(),
-                    tipo="executado",
-                    categoria_id=ex.categoria_id,
-                    categoria_nome=nome_cat,
-                    categoria_cor=cor_cat,
-                    titulo=nome_cat if ex.bloco_id is None else "Execução",
-                    status=ex.status,
+        fim_ex = _fim_efetivo(ex, agora)
+        titulo = None if ex.bloco_id is None else "Execução"
+        for dia, ini_fat, fim_fat in quebrar_intervalo_por_dias(ex.inicio, fim_ex, fuso_str):
+            if no_periodo(dia):
+                faixas_por_data[dia][1].append(
+                    _faixa_intervalo(
+                        "executado", ini_fat, fim_fat, ex.categoria_id, mapa_cats, titulo, ex.status
+                    )
                 )
-            )
 
     faixas_dias: list[FaixaDia] = []
-    cursor_data = de
-    while cursor_data <= ate:
-        plan_list, exec_list = faixas_por_data[cursor_data]
-        seg_plan_dia = segundos_plan_por_dia[cursor_data]
-        seg_exec_dia = segundos_exec_por_dia[cursor_data]
-        taxa_vol_dia = aderencia_volume(seg_exec_dia, seg_plan_dia)
-
-        # Blocos desse dia (avaliados no fuso local) para aderência temporal
-        blocos_dia = bloco_inputs_por_dia.get(cursor_data, [])
-        taxa_temp_dia = aderencia_ponderada_dia(blocos_dia) if blocos_dia else 1.0
-
+    dia_cursor = de
+    while dia_cursor <= ate:
+        planejados, executados = faixas_por_data.get(dia_cursor, ([], []))
         faixas_dias.append(
             FaixaDia(
-                data=cursor_data,
-                segundos_planejados=seg_plan_dia,
-                segundos_executados=seg_exec_dia,
-                aderencia_volume=taxa_vol_dia,
-                aderencia_temporal=taxa_temp_dia,
-                planejados=plan_list,
-                executados=exec_list,
+                data=dia_cursor,
+                segundos_planejados=plan_dia.get(dia_cursor, 0),
+                segundos_executados=exec_dia.get(dia_cursor, 0),
+                aderencia_volume=aderencia_volume(
+                    aderentes_dia.get(dia_cursor, 0), plan_dia.get(dia_cursor, 0)
+                ),
+                aderencia_temporal=aderencia_ponderada_dia(inputs_por_dia.get(dia_cursor, [])),
+                planejados=planejados,
+                executados=executados,
             )
         )
-        cursor_data += timedelta(days=1)
+        dia_cursor += timedelta(days=1)
 
-    total_plan = sum(c.segundos_planejados for c in lista_categorias_resumo)
-    total_exec = sum(c.segundos_executados for c in lista_categorias_resumo)
-    geral_vol = aderencia_volume(total_exec, total_plan)
-    geral_temp = aderencia_ponderada_dia(bloco_aderencia_inputs) if bloco_aderencia_inputs else 1.0
+    semanas: list[SemanaResumo] = []
+    if agrupamento == "semana":
+        semanas = _agregar_semanas(
+            faixas_dias, aderentes_dia, inputs_por_dia, inicio_semana=inicio_semana
+        )
 
+    total_plan = sum(plan_cat.values())
+    total_exec = sum(linha.segundos_executados for linha in linhas)
     return ResumoPeriodoResponse(
         de=de,
         ate=ate,
         agrupamento=agrupamento,
         total_segundos_planejados=total_plan,
         total_segundos_executados=total_exec,
-        aderencia_volume_geral=geral_vol,
-        aderencia_temporal_geral=geral_temp,
-        categorias=lista_categorias_resumo,
+        aderencia_volume_geral=aderencia_volume(sum(aderentes_cat.values()), total_plan),
+        aderencia_temporal_geral=aderencia_ponderada_dia(inputs_todos),
+        categorias=linhas,
         faixas_dias=faixas_dias,
+        semanas=semanas,
     )
+
+
+def _agregar_semanas(
+    faixas_dias: Sequence[FaixaDia],
+    aderentes_dia: dict[date, int],
+    inputs_por_dia: dict[date, list[BlocoAderenciaInput]],
+    inicio_semana: int,
+) -> list[SemanaResumo]:
+    por_semana: dict[date, list[FaixaDia]] = defaultdict(list)
+    for faixa in faixas_dias:
+        por_semana[inicio_da_semana(faixa.data, inicio_semana)].append(faixa)
+
+    resultado: list[SemanaResumo] = []
+    for inicio, dias in sorted(por_semana.items()):
+        plan = sum(d.segundos_planejados for d in dias)
+        aderentes = sum(aderentes_dia.get(d.data, 0) for d in dias)
+        inputs = [inp for d in dias for inp in inputs_por_dia.get(d.data, [])]
+        resultado.append(
+            SemanaResumo(
+                inicio=dias[0].data,
+                fim=dias[-1].data,
+                inicio_semana=inicio,
+                segundos_planejados=plan,
+                segundos_executados=sum(d.segundos_executados for d in dias),
+                aderencia_volume=aderencia_volume(aderentes, plan),
+                aderencia_temporal=aderencia_ponderada_dia(inputs),
+            )
+        )
+    return resultado

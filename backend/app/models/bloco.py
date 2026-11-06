@@ -34,11 +34,10 @@ class Bloco(EntidadeMixin, Base):
             name="uq_bloco_modelo_data_local",
         ),
         Index("ix_bloco_usuario_data_local", "usuario_id", "data_local"),
+        Index("ix_bloco_usuario_atualizado_em", "usuario_id", "atualizado_em"),
     )
 
-    usuario_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("usuario.id", ondelete="CASCADE"), index=True
-    )
+    usuario_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("usuario.id", ondelete="CASCADE"))
     categoria_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("categoria.id", ondelete="RESTRICT"), index=True
     )

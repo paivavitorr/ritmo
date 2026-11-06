@@ -9,6 +9,7 @@ from app.models.modelo_semana import ModeloBloco
 from app.models.usuario import Usuario
 from app.repositories.bloco import BlocoRepository
 from app.repositories.modelo_semana import ModeloBlocoRepository
+from app.services.lembrete import agendar_lembrete_para_bloco
 
 
 def dia_semana_convencao_ritmo(dia: date) -> int:
@@ -22,8 +23,15 @@ class MaterializadorSemanaService:
         self.modelos = ModeloBlocoRepository(session)
         self.blocos = BlocoRepository(session)
 
-    async def aplicar_modelo_na_semana(self, usuario: Usuario, data_inicio: date) -> list[Bloco]:
-        """Materializa de forma idempotente os `ModeloBloco` ativos nos 7 dias da semana."""
+    async def aplicar_modelo_na_semana(
+        self, usuario: Usuario, data_inicio: date, agora: datetime | None = None
+    ) -> list[Bloco]:
+        """Materializa de forma idempotente os `ModeloBloco` ativos nos 7 dias da semana.
+
+        Não faz commit: quem chama decide (blocos e lembretes saem na mesma transação).
+        Modelos excluídos ou inativos são ignorados. Os lembretes de cada bloco novo ou alterado
+        seguem `ModeloBloco.lembretes` (ou o padrão do usuário, se vazio).
+        """
         modelos_ativos = await self.modelos.listar_do_usuario(usuario.id, apenas_ativos=True)
         por_dia_semana: dict[int, list[ModeloBloco]] = {}
         for m in modelos_ativos:
@@ -40,17 +48,28 @@ class MaterializadorSemanaService:
         }
 
         materializados: list[Bloco] = []
+        a_agendar: list[tuple[Bloco, ModeloBloco]] = []
         for offset in range(7):
             dia = data_inicio + timedelta(days=offset)
             ds = dia_semana_convencao_ritmo(dia)
             for modelo in por_dia_semana.get(ds, []):
                 existente = mapa_existentes.get((modelo.id, dia))
-                bloco = self._sincronizar_item(usuario, modelo, dia, existente)
-                if bloco is not None:
-                    materializados.append(bloco)
+                bloco, alterado = self._sincronizar_item(usuario, modelo, dia, existente)
+                if bloco is None:
+                    continue
+                materializados.append(bloco)
+                if alterado:
+                    a_agendar.append((bloco, modelo))
 
         await self.session.flush()
-        await self.session.commit()
+        for bloco, modelo in a_agendar:
+            await agendar_lembrete_para_bloco(
+                self.session,
+                bloco,
+                usuario.antecedencia_padrao_min,
+                antecedencias=modelo.lembretes,
+                agora=agora,
+            )
         return materializados
 
     def _sincronizar_item(
@@ -59,7 +78,8 @@ class MaterializadorSemanaService:
         modelo: ModeloBloco,
         dia: date,
         existente: Bloco | None,
-    ) -> Bloco | None:
+    ) -> tuple[Bloco | None, bool]:
+        """Retorna `(bloco, alterado)`; `bloco` é `None` se o usuário excluiu a instância."""
         inicio_utc, fim_utc = combinar_data_hora_local(
             dia, modelo.hora_inicio, modelo.hora_fim, usuario.fuso
         )
@@ -81,10 +101,12 @@ class MaterializadorSemanaService:
                 ],
             )
             self.session.add(novo)
-            return novo
+            return novo, True
 
-        if existente.excluido_em is not None or existente.desvinculado:
-            return existente if existente.excluido_em is None else None
+        if existente.excluido_em is not None:
+            return None, False
+        if existente.desvinculado:
+            return existente, False
 
         pausas_atuais = [
             (garantir_utc(p.inicio), garantir_utc(p.fim)) for p in existente.pausas_planejadas
@@ -97,7 +119,7 @@ class MaterializadorSemanaService:
             and pausas_atuais == pausas_tuplas
         )
         if campos_iguais:
-            return existente
+            return existente, False
 
         existente.categoria_id = modelo.categoria_id
         existente.titulo = modelo.titulo
@@ -108,7 +130,7 @@ class MaterializadorSemanaService:
             for p_ini, p_fim in pausas_tuplas:
                 existente.pausas_planejadas.append(PausaPlanejada(inicio=p_ini, fim=p_fim))
         existente.versao += 1
-        return existente
+        return existente, True
 
     @staticmethod
     def _calcular_intervalos_pausas(
