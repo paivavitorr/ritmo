@@ -90,7 +90,7 @@ export function formatarDuracaoMinutos(totalMinutos: number): string {
   const resto = min % 60
   if (horas === 0) return `${resto}min`
   if (resto === 0) return `${horas}h`
-  return `${horas}h ${String(resto).padStart(2, '0')}min`
+  return `${horas}h ${resto}min`
 }
 
 export function formatarDuracaoSegundos(totalSegundos: number): string {
