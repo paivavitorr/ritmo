@@ -3,7 +3,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from app.core.errors import AppError
 from app.core.tempo import garantir_utc, limites_utc_do_dia
+
+LIMITE_DIAS_PERIODO = 92
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +27,16 @@ class Intervalo:
     @property
     def segundos(self) -> int:
         return max(0, round((self.fim - self.inicio).total_seconds()))
+
+
+def validar_periodo(de: date, ate: date, limite_dias: int = LIMITE_DIAS_PERIODO) -> None:
+    """Garante `de <= ate` e `ate - de <= limite_dias`; caso contrário, levanta 422."""
+    if ate < de:
+        raise AppError(422, "A data final deve ser maior ou igual à inicial", "validacao")
+    if (ate - de).days > limite_dias:
+        raise AppError(
+            422, f"O período não pode ultrapassar {limite_dias} dias", "periodo_muito_longo"
+        )
 
 
 def mesclar_intervalos(intervalos: Sequence[Intervalo]) -> list[Intervalo]:

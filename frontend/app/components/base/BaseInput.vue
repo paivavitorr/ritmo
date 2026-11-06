@@ -59,7 +59,7 @@ function aoDigitar(evento: Event) {
       :step="props.step"
       :aria-invalid="Boolean(props.erro)"
       :aria-describedby="props.erro ? `${props.id}-erro` : props.dica ? `${props.id}-dica` : undefined"
-      class="w-full rounded-[var(--radius-bloco)] border bg-papel px-3.5 py-2.5 text-base text-tinta placeholder:text-grafite-suave/70 disabled:opacity-60"
+      class="min-h-11 w-full rounded-[var(--radius-bloco)] border bg-papel px-3.5 py-2.5 text-base text-tinta placeholder:text-grafite-suave/70 disabled:opacity-60"
       :class="[
         props.erro ? 'border-erro' : 'border-linha',
         props.tabular ? 'tabular' : '',

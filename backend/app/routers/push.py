@@ -1,6 +1,9 @@
+import hmac
+
 from fastapi import APIRouter, status
 
 from app.config import get_settings
+from app.core.errors import ConflitoError
 from app.dependencies import CurrentUserDep, SessionDep
 from app.models.lembrete import PushAssinatura
 from app.repositories.lembrete import LembreteRepository
@@ -12,6 +15,12 @@ from app.schemas.lembrete import (
 )
 
 router = APIRouter(prefix="/push", tags=["push"])
+
+
+def _mesmas_chaves(existente: PushAssinatura, dados: PushAssinaturaCreate) -> bool:
+    return hmac.compare_digest(
+        existente.p256dh.encode(), dados.p256dh.encode()
+    ) and hmac.compare_digest(existente.auth.encode(), dados.auth.encode())
 
 
 @router.get("/chave-publica", response_model=PushChavePublicaResponse)
@@ -29,13 +38,20 @@ async def salvar_assinatura_push(
     repo = LembreteRepository(session)
     existente = await repo.obter_assinatura_por_endpoint(dados.endpoint)
 
-    if existente is not None:
+    if existente is not None and existente.usuario_id == usuario.id:
         existente.p256dh = dados.p256dh
         existente.auth = dados.auth
         existente.user_agent = dados.user_agent
-        existente.usuario_id = usuario.id
         await session.commit()
         return PushAssinaturaRead.model_validate(existente)
+
+    if existente is not None:
+        # Endpoint de outro usuário (ex.: troca de conta no mesmo navegador): só transfere
+        # se a requisição provar posse apresentando as mesmas chaves da assinatura.
+        if not _mesmas_chaves(existente, dados):
+            raise ConflitoError("Endpoint já vinculado a outra conta")
+        await session.delete(existente)
+        await session.flush()
 
     nova = PushAssinatura(
         usuario_id=usuario.id,

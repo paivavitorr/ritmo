@@ -268,7 +268,8 @@ export interface paths {
     put?: never
     /**
          * Confirmar Bloco Como Planejado
-         * @description Cria ou substitui a `Execucao` concluída idêntica ao bloco planejado.
+         * @description Registra "Fiz como planejado": devolve a execução concluída existente (idempotente),
+         *     encerra a em andamento ou cria uma com o intervalo planejado. Nunca sobrescreve tempo medido.
          */
     post: operations['confirmar_bloco_como_planejado_blocos__bloco_id__confirmar_post']
     delete?: never
@@ -444,6 +445,23 @@ export interface paths {
     put?: never
     /** Sincronizar Mutacoes */
     post: operations['sincronizar_mutacoes_sync_batch_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/sync/mudancas': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** Listar Mudancas */
+    get: operations['listar_mudancas_sync_mudancas_get']
+    put?: never
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -703,9 +721,9 @@ export interface components {
       /** Segundos Liquidos Aderentes */
       segundos_liquidos_aderentes: number
       /** Aderencia Volume */
-      aderencia_volume: number
+      aderencia_volume: number | null
       /** Aderencia Temporal */
-      aderencia_temporal: number
+      aderencia_temporal: number | null
       /**
              * Eh Espontaneo
              * @default false
@@ -726,6 +744,19 @@ export interface components {
       meta_semanal_min?: number | null
       /** Ordem */
       ordem?: number | null
+    }
+    /** ExcluidoSync */
+    ExcluidoSync: {
+      /**
+             * Entidade
+             * @enum {string}
+             */
+      entidade: 'bloco' | 'categoria' | 'execucao' | 'modelo_bloco'
+      /**
+             * Id
+             * Format: uuid
+             */
+      id: string
     }
     /** ExecucaoConfirmarBlocoRequest */
     ExecucaoConfirmarBlocoRequest: {
@@ -879,9 +910,9 @@ export interface components {
       /** Segundos Executados */
       segundos_executados: number
       /** Aderencia Volume */
-      aderencia_volume: number
+      aderencia_volume: number | null
       /** Aderencia Temporal */
-      aderencia_temporal: number
+      aderencia_temporal: number | null
       /** Planejados */
       planejados: components['schemas']['FaixaIntervalo'][]
       /** Executados */
@@ -945,6 +976,8 @@ export interface components {
              * Format: date-time
              */
       criado_em: string
+      /** Versao Base */
+      versao_base?: number | null
     }
     /** ItemResultadoSync */
     ItemResultadoSync: {
@@ -957,11 +990,15 @@ export interface components {
              * Status
              * @enum {string}
              */
-      status: 'aplicado' | 'ignorado' | 'erro'
+      status: 'aplicado' | 'ignorado' | 'conflito' | 'erro'
       /** Mensagem */
       mensagem?: string | null
       /** Versao Servidor */
       versao_servidor?: number | null
+      /** Entidade Servidor */
+      entidade_servidor?: {
+        [key: string]: unknown
+      } | null
     }
     /** LoginRequest */
     LoginRequest: {
@@ -1224,13 +1261,18 @@ export interface components {
       /** Total Segundos Executados */
       total_segundos_executados: number
       /** Aderencia Volume Geral */
-      aderencia_volume_geral: number
+      aderencia_volume_geral: number | null
       /** Aderencia Temporal Geral */
-      aderencia_temporal_geral: number
+      aderencia_temporal_geral: number | null
       /** Categorias */
       categorias: components['schemas']['CategoriaResumo'][]
       /** Faixas Dias */
       faixas_dias: components['schemas']['FaixaDia'][]
+      /**
+             * Semanas
+             * @default []
+             */
+      semanas: components['schemas']['SemanaResumo'][]
     }
     /** SaudeResponse */
     SaudeResponse: {
@@ -1239,6 +1281,35 @@ export interface components {
              * @constant
              */
       status: 'ok'
+    }
+    /**
+         * SemanaResumo
+         * @description Agregação por semana local (recortada aos limites do período consultado).
+         */
+    SemanaResumo: {
+      /**
+             * Inicio
+             * Format: date
+             */
+      inicio: string
+      /**
+             * Fim
+             * Format: date
+             */
+      fim: string
+      /**
+             * Inicio Semana
+             * Format: date
+             */
+      inicio_semana: string
+      /** Segundos Planejados */
+      segundos_planejados: number
+      /** Segundos Executados */
+      segundos_executados: number
+      /** Aderencia Volume */
+      aderencia_volume: number | null
+      /** Aderencia Temporal */
+      aderencia_temporal: number | null
     }
     /** SyncBatchRequest */
     SyncBatchRequest: {
@@ -1251,6 +1322,23 @@ export interface components {
       processadas: number
       /** Resultados */
       resultados: components['schemas']['ItemResultadoSync'][]
+    }
+    /** SyncMudancasResponse */
+    SyncMudancasResponse: {
+      /** Blocos */
+      blocos: components['schemas']['BlocoRead'][]
+      /** Categorias */
+      categorias: components['schemas']['CategoriaRead'][]
+      /** Execucoes */
+      execucoes: components['schemas']['ExecucaoRead'][]
+      /** Modelos Bloco */
+      modelos_bloco: components['schemas']['ModeloBlocoRead'][]
+      /** Excluidos */
+      excluidos: components['schemas']['ExcluidoSync'][]
+      /** Cursor */
+      cursor: string
+      /** Tem Mais */
+      tem_mais: boolean
     }
     /** TokenResponse */
     TokenResponse: {
@@ -2446,6 +2534,37 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['SyncBatchResponse']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  listar_mudancas_sync_mudancas_get: {
+    parameters: {
+      query?: {
+        desde?: string | null
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SyncMudancasResponse']
         }
       }
       /** @description Validation Error */

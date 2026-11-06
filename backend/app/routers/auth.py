@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.config import get_settings
+from app.core.rate_limit import limitar
 from app.dependencies import CurrentUserDep, SessionDep
 from app.schemas.usuario import (
     LoginRequest,
@@ -23,7 +24,7 @@ def _definir_cookie_refresh(response: Response, token_bruto: str) -> None:
         max_age=max_age,
         httponly=True,
         secure=settings.cookie_seguro,
-        samesite="lax",
+        samesite=settings.cookie_samesite,
         path="/auth",
     )
 
@@ -34,12 +35,17 @@ def _limpar_cookie_refresh(response: Response) -> None:
         key=settings.refresh_cookie_nome,
         httponly=True,
         secure=settings.cookie_seguro,
-        samesite="lax",
+        samesite=settings.cookie_samesite,
         path="/auth",
     )
 
 
-@router.post("/registrar", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/registrar",
+    response_model=TokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(limitar("registrar", 5))],
+)
 async def registrar(
     dados: UsuarioCreate,
     request: Request,
@@ -53,7 +59,7 @@ async def registrar(
     return token_resp
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, dependencies=[Depends(limitar("login", 10))])
 async def login(
     credenciais: LoginRequest,
     request: Request,
@@ -67,7 +73,9 @@ async def login(
     return token_resp
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post(
+    "/refresh", response_model=TokenResponse, dependencies=[Depends(limitar("refresh", 30))]
+)
 async def refresh(
     request: Request,
     response: Response,

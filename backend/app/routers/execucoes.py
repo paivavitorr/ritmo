@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
-from app.core.errors import AppError, NaoEncontradoError
+from app.core.errors import AppError, ConflitoError, NaoEncontradoError
 from app.core.tempo import garantir_utc, limites_utc_do_dia
 from app.dependencies import CurrentUserDep, SessionDep
 from app.models.execucao import Execucao, PausaExecucao
@@ -19,50 +19,16 @@ from app.schemas.execucao import (
     ExecucaoTransicaoRequest,
     ExecucaoUpdate,
 )
-from app.services.horas_liquidas import Intervalo, segundos_liquidos
+from app.services.execucao import (
+    conflito_se_integridade,
+    encerrar_execucao_aberta,
+    recalcular_liquido,
+    registrar_confirmacao_bloco,
+    validar_coerencia,
+)
+from app.services.horas_liquidas import validar_periodo
 
 router = APIRouter(prefix="/execucoes", tags=["execucoes"])
-
-
-def _recalcular_liquido(
-    inicio: datetime,
-    fim: datetime | None,
-    pausas: list[PausaExecucao],
-) -> int:
-    if fim is None:
-        return 0
-    ini_utc = garantir_utc(inicio)
-    fim_utc = garantir_utc(fim)
-    if fim_utc <= ini_utc:
-        return 0
-    base = Intervalo(ini_utc, fim_utc)
-    intervalos_pausa = [
-        Intervalo(p.inicio, p.fim)
-        for p in pausas
-        if p.fim is not None and garantir_utc(p.fim) > garantir_utc(p.inicio)
-    ]
-    return segundos_liquidos(base, intervalos_pausa)
-
-
-def _encerrar_execucao_aberta(
-    execucao: Execucao,
-    instante: datetime,
-    status_final: str = "concluida",
-) -> None:
-    ini_utc = garantir_utc(execucao.inicio)
-    fim_efetivo = max(instante, ini_utc + timedelta(seconds=1))
-    for p in execucao.pausas:
-        if p.fim is None:
-            p_ini = garantir_utc(p.inicio)
-            p.fim = max(fim_efetivo, p_ini + timedelta(seconds=1))
-            if garantir_utc(p.fim) > fim_efetivo:
-                fim_efetivo = garantir_utc(p.fim)
-    execucao.fim = fim_efetivo
-    execucao.status = status_final
-    execucao.segundos_liquidos = _recalcular_liquido(
-        execucao.inicio, execucao.fim, list(execucao.pausas)
-    )
-    execucao.versao += 1
 
 
 @router.get("", response_model=list[ExecucaoRead])
@@ -72,8 +38,7 @@ async def listar_execucoes(
     usuario: CurrentUserDep,
     session: SessionDep,
 ) -> list[ExecucaoRead]:
-    if ate < de:
-        raise AppError(422, "A data final deve ser maior ou igual à inicial", "validacao")
+    validar_periodo(de, ate)
 
     inicio_utc, _ = limites_utc_do_dia(de, usuario.fuso)
     _, fim_utc = limites_utc_do_dia(ate, usuario.fuso)
@@ -106,7 +71,7 @@ async def criar_execucao(
         )
         for p in dados.pausas
     ]
-    liq = _recalcular_liquido(dados.inicio, dados.fim, pausas_orm)
+    liq = recalcular_liquido(dados.inicio, dados.fim, pausas_orm)
 
     kwargs: dict[str, object] = {
         "usuario_id": usuario.id,
@@ -124,8 +89,9 @@ async def criar_execucao(
 
     repo = ExecucaoRepository(session)
     execucao = Execucao(**kwargs)
-    await repo.criar(execucao)
-    await session.commit()
+    async with conflito_se_integridade(session, "Já existe uma execução com este id"):
+        await repo.criar(execucao)
+        await session.commit()
     recarregada = await repo.obter_do_usuario(usuario.id, execucao.id)
     assert recarregada is not None
     return ExecucaoRead.model_validate(recarregada)
@@ -169,8 +135,14 @@ async def iniciar_execucao(
 
     repo = ExecucaoRepository(session)
     abertas = await repo.listar_em_andamento(usuario.id, for_update=True)
+    # `instante` no passado: só encerra a aberta se ela começou antes dele.
     for aberta in abertas:
-        _encerrar_execucao_aberta(aberta, agora, status_final="concluida")
+        if garantir_utc(aberta.inicio) >= agora:
+            raise ConflitoError(
+                "Já existe uma execução em andamento iniciada após o instante informado"
+            )
+    for aberta in abertas:
+        encerrar_execucao_aberta(aberta, agora, status_final="concluida")
 
     kwargs: dict[str, object] = {
         "usuario_id": usuario.id,
@@ -187,8 +159,12 @@ async def iniciar_execucao(
         kwargs["id"] = dados.id
 
     nova = Execucao(**kwargs)
-    await repo.criar(nova)
-    await session.commit()
+    async with conflito_se_integridade(
+        session, "Já existe uma execução em andamento ou o id informado já existe"
+    ):
+        await session.flush()  # grava o encerramento antes de inserir a nova
+        await repo.criar(nova)
+        await session.commit()
     recarregada = await repo.obter_do_usuario(usuario.id, nova.id)
     assert recarregada is not None
     return ExecucaoRead.model_validate(recarregada)
@@ -200,65 +176,12 @@ async def confirmar_bloco_como_planejado(
     usuario: CurrentUserDep,
     session: SessionDep,
 ) -> ExecucaoRead:
-    bloco_repo = BlocoRepository(session)
-    bloco = await bloco_repo.obter_do_usuario(usuario.id, dados.bloco_id)
+    bloco = await BlocoRepository(session).obter_do_usuario(usuario.id, dados.bloco_id)
     if bloco is None:
         raise NaoEncontradoError("Bloco não encontrado")
 
-    repo = ExecucaoRepository(session)
-    existentes = await repo.listar_por_bloco(usuario.id, bloco.id)
-
-    pausas_planejadas = [PausaExecucao(inicio=p.inicio, fim=p.fim) for p in bloco.pausas_planejadas]
-    liq = (
-        0
-        if dados.status == "pulada"
-        else _recalcular_liquido(bloco.inicio, bloco.fim, pausas_planejadas)
-    )
-
-    if existentes:
-        # Prioriza a execução em andamento (se houver) ou a mais recente
-        principal = next(
-            (e for e in existentes if e.status == "em_andamento" and e.fim is None),
-            existentes[-1],
-        )
-        for extra in existentes:
-            if extra.id == principal.id:
-                continue
-            if extra.status == "em_andamento" and extra.fim is None:
-                _encerrar_execucao_aberta(extra, datetime.now(UTC), status_final="concluida")
-            extra.excluido_em = datetime.now(UTC)
-            extra.versao += 1
-
-        principal.categoria_id = bloco.categoria_id
-        principal.inicio = bloco.inicio
-        principal.fim = bloco.fim
-        principal.status = dados.status
-        principal.origem = "confirmacao"
-        principal.pausas.clear()
-        for p in pausas_planejadas:
-            principal.pausas.append(p)
-        principal.segundos_liquidos = liq
-        principal.versao += 1
-        alvo_id = principal.id
-    else:
-        nova = Execucao(
-            usuario_id=usuario.id,
-            categoria_id=bloco.categoria_id,
-            bloco_id=bloco.id,
-            inicio=bloco.inicio,
-            fim=bloco.fim,
-            status=dados.status,
-            origem="confirmacao",
-            segundos_liquidos=liq,
-            pausas=pausas_planejadas,
-        )
-        await repo.criar(nova)
-        alvo_id = nova.id
-
-    await session.commit()
-    recarregada = await repo.obter_do_usuario(usuario.id, alvo_id)
-    assert recarregada is not None
-    return ExecucaoRead.model_validate(recarregada)
+    execucao = await registrar_confirmacao_bloco(session, bloco, datetime.now(UTC), dados.status)
+    return ExecucaoRead.model_validate(execucao)
 
 
 @router.get("/{execucao_id}", response_model=ExecucaoRead)
@@ -297,53 +220,37 @@ async def atualizar_execucao(
         if await bloco_repo.obter_do_usuario(usuario.id, campos["bloco_id"]) is None:
             raise NaoEncontradoError("Bloco não encontrado")
 
-    novo_ini = garantir_utc(dados.inicio if dados.inicio is not None else execucao.inicio)
-    fim_base = dados.fim if dados.fim is not None else execucao.fim
-    novo_fim = garantir_utc(fim_base) if fim_base is not None else None
-    if novo_fim is not None and novo_fim <= novo_ini:
-        raise AppError(422, "O fim da execução deve ser posterior ao início", "validacao")
+    novo_inicio = dados.inicio if dados.inicio is not None else execucao.inicio
+    novo_fim = dados.fim if dados.fim is not None else execucao.fim
+    novo_status = dados.status if dados.status is not None else execucao.status
 
-    if "pausas" in campos and dados.pausas is not None:
+    substituir_pausas = "pausas" in campos and dados.pausas is not None
+    pausas_finais: list[PausaExecucao] = []
+    if substituir_pausas and dados.pausas is not None:
         for p in dados.pausas:
-            p_ini = garantir_utc(p.inicio)
-            p_fim = garantir_utc(p.fim)
-            if p_ini < novo_ini or (novo_fim is not None and p_fim > novo_fim):
-                raise AppError(
-                    422,
-                    "As pausas devem ficar dentro do intervalo da execução",
-                    "validacao",
-                )
-        execucao.pausas.clear()
-        for p in dados.pausas:
-            kwargs_p: dict[str, object] = {
-                "inicio": p.inicio,
-                "fim": p.fim,
-            }
+            kwargs_p: dict[str, object] = {"inicio": p.inicio, "fim": p.fim}
             if p.id is not None:
                 kwargs_p["id"] = p.id
-            execucao.pausas.append(PausaExecucao(**kwargs_p))
+            pausas_finais.append(PausaExecucao(**kwargs_p))
         campos.pop("pausas")
     else:
-        for p_existente in execucao.pausas:
-            pe_ini = garantir_utc(p_existente.inicio)
-            pe_fim = garantir_utc(p_existente.fim) if p_existente.fim is not None else None
-            if pe_ini < novo_ini or (
-                novo_fim is not None and pe_fim is not None and pe_fim > novo_fim
-            ):
-                raise AppError(
-                    422,
-                    "As pausas existentes ficam fora do novo intervalo da execução",
-                    "validacao",
-                )
+        pausas_finais = list(execucao.pausas)
+
+    validar_coerencia(novo_status, novo_inicio, novo_fim, pausas_finais)
+
+    if substituir_pausas:
+        execucao.pausas.clear()
+        execucao.pausas.extend(pausas_finais)
 
     for campo, valor in campos.items():
         setattr(execucao, campo, valor)
 
-    execucao.segundos_liquidos = _recalcular_liquido(
+    execucao.segundos_liquidos = recalcular_liquido(
         execucao.inicio, execucao.fim, list(execucao.pausas)
     )
     execucao.versao += 1
-    await session.commit()
+    async with conflito_se_integridade(session, "Já existe outra execução em andamento"):
+        await session.commit()
     recarregada = await repo.obter_do_usuario(usuario.id, execucao.id)
     assert recarregada is not None
     return ExecucaoRead.model_validate(recarregada)
@@ -423,7 +330,7 @@ async def concluir_execucao(
 
     instante_req = dados.instante if dados and dados.instante is not None else datetime.now(UTC)
     status_final = dados.status if dados is not None else "concluida"
-    _encerrar_execucao_aberta(execucao, garantir_utc(instante_req), status_final=status_final)
+    encerrar_execucao_aberta(execucao, garantir_utc(instante_req), status_final=status_final)
 
     await session.commit()
     recarregada = await repo.obter_do_usuario(usuario.id, execucao.id)

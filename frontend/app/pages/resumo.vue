@@ -13,7 +13,7 @@ type ResumoPeriodoResponse = components['schemas']['ResumoPeriodoResponse']
 const auth = useAuthStore()
 const { requisitar } = useApi()
 
-const fusoUsuario = computed(() => auth.usuario?.fuso || 'America/Manaus')
+const fusoUsuario = computed(() => auth.usuario?.fuso || Intl.DateTimeFormat().resolvedOptions().timeZone)
 const tipoFiltro = ref<'hoje' | 'semana' | 'ultimos7'>('semana')
 const carregando = ref(false)
 const erro = ref<string | null>(null)
@@ -51,6 +51,10 @@ async function carregarResumo() {
   }
 }
 
+// O backend pode devolver null quando não há plano no período.
+const aderenciaVolume = computed<number | null>(() => resumo.value?.aderencia_volume_geral ?? null)
+const aderenciaTemporal = computed<number | null>(() => resumo.value?.aderencia_temporal_geral ?? null)
+
 watch(tipoFiltro, carregarResumo)
 onMounted(carregarResumo)
 </script>
@@ -72,7 +76,8 @@ onMounted(carregarResumo)
       <div class="inline-flex rounded-[var(--radius-bloco)] border border-linha bg-papel p-0.5">
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+          class="min-h-11 rounded-lg px-3 text-sm font-medium transition-colors"
+          :aria-pressed="tipoFiltro === 'hoje'"
           :class="tipoFiltro === 'hoje' ? 'bg-nevoa text-tinta' : 'text-grafite-suave hover:text-tinta'"
           @click="tipoFiltro = 'hoje'"
         >
@@ -80,7 +85,8 @@ onMounted(carregarResumo)
         </button>
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+          class="min-h-11 rounded-lg px-3 text-sm font-medium transition-colors"
+          :aria-pressed="tipoFiltro === 'semana'"
           :class="tipoFiltro === 'semana' ? 'bg-nevoa text-tinta' : 'text-grafite-suave hover:text-tinta'"
           @click="tipoFiltro = 'semana'"
         >
@@ -88,7 +94,8 @@ onMounted(carregarResumo)
         </button>
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+          class="min-h-11 rounded-lg px-3 text-sm font-medium transition-colors"
+          :aria-pressed="tipoFiltro === 'ultimos7'"
           :class="tipoFiltro === 'ultimos7' ? 'bg-nevoa text-tinta' : 'text-grafite-suave hover:text-tinta'"
           @click="tipoFiltro = 'ultimos7'"
         >
@@ -96,6 +103,15 @@ onMounted(carregarResumo)
         </button>
       </div>
     </header>
+
+    <!-- Carregando (primeira vez) -->
+    <p
+      v-if="carregando && !resumo"
+      class="text-sm text-grafite-suave"
+      role="status"
+    >
+      Carregando resumo…
+    </p>
 
     <!-- Alerta de erro -->
     <p
@@ -128,14 +144,14 @@ onMounted(carregarResumo)
       <div class="rounded-[var(--radius-bloco)] border border-linha bg-papel p-4 shadow-sm">
         <span class="text-xs text-grafite-suave">Aderência de volume</span>
         <div class="mt-2">
-          <AderenciaIndicador :valor="resumo.aderencia_volume_geral" />
+          <AderenciaIndicador :valor="aderenciaVolume" />
         </div>
       </div>
 
       <div class="rounded-[var(--radius-bloco)] border border-linha bg-papel p-4 shadow-sm">
         <span class="text-xs text-grafite-suave">Aderência temporal</span>
         <div class="mt-2">
-          <AderenciaIndicador :valor="resumo.aderencia_temporal_geral" />
+          <AderenciaIndicador :valor="aderenciaTemporal" />
         </div>
       </div>
     </div>
@@ -151,7 +167,7 @@ onMounted(carregarResumo)
       <div class="space-y-2">
         <CategoriaLinha
           v-for="cat in resumo.categorias"
-          :key="cat.categoria_id ?? 'avulso'"
+          :key="`${cat.categoria_id ?? 'avulso'}-${cat.eh_espontaneo ? 'e' : 'p'}`"
           :categoria="cat"
         />
       </div>

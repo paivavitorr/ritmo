@@ -28,7 +28,7 @@ function estiloSegmento(item: FaixaIntervalo) {
       left: `${leftPct}%`,
       width: `${widthPct}%`,
     },
-    classe: item.tipo === 'planejado' ? `${cor.blocoContorno} border` : cor.blocoPreenchimento,
+    classe: item.tipo === 'planejado' ? cor.blocoContorno : cor.blocoPreenchimento,
   }
 }
 </script>

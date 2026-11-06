@@ -66,10 +66,14 @@ def test_propriedade_aderencia_temporal_entre_zero_e_um(
     execs: list[Intervalo],
 ) -> None:
     taxa = aderencia_temporal_bloco(bloco, pausas, execs)
+    liquidos = recortar_intervalos(bloco, pausas)
+    if not any(iv.segundos > 0 for iv in liquidos):
+        assert taxa is None
+        return
+    assert taxa is not None
     assert 0.0 <= taxa <= 1.0
 
     # Quando a execução cobre exatamente os intervalos líquidos planejados, aderência é 1.0
-    liquidos = recortar_intervalos(bloco, pausas)
     assert aderencia_temporal_bloco(bloco, pausas, liquidos) == 1.0
 
 
@@ -121,9 +125,10 @@ def test_intersecao_e_aderencia_ponderada() -> None:
             BlocoAderenciaInput(bloco=b2, intervalos_execucao_liquidos=(e2,)),
         ]
     )
+    assert media is not None
     assert abs(media - 0.75) < 1e-9
     assert aderencia_volume(3600, 7200) == 0.5
     assert aderencia_volume(9000, 7200) == 1.0
-    assert aderencia_volume(100, 0) == 1.0
+    assert aderencia_volume(100, 0) is None
     assert len(mesclar_intervalos([b1, b2])) == 2
     assert len(intersecao_listas([b2], [e2])) == 1

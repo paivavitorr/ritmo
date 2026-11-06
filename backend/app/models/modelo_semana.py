@@ -2,7 +2,7 @@ from datetime import time
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, ForeignKey, SmallInteger, String, Time, Uuid
+from sqlalchemy import JSON, Boolean, ForeignKey, Index, SmallInteger, String, Time, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, EntidadeMixin
@@ -12,10 +12,11 @@ class ModeloBloco(EntidadeMixin, Base):
     """Bloco da rotina semanal que se repete e pode ser materializado em datas."""
 
     __tablename__ = "modelo_bloco"
-
-    usuario_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("usuario.id", ondelete="CASCADE"), index=True
+    __table_args__ = (
+        Index("ix_modelo_bloco_usuario_atualizado_em", "usuario_id", "atualizado_em"),
     )
+
+    usuario_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("usuario.id", ondelete="CASCADE"))
     categoria_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("categoria.id", ondelete="RESTRICT"), index=True
     )

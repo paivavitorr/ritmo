@@ -3,3 +3,6 @@ node_modules
 .output
 dist
 .env
+.env.*
+.git
+*.log

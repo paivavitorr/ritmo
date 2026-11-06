@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useArrasto, type ModoArrasto } from '~/composables/useArrasto'
+import { calcularNovosLimites, useArrasto, type ModoArrasto } from '~/composables/useArrasto'
 import type { BlocoRead } from '~/stores/blocos'
 import type { CategoriaRead } from '~/stores/categorias'
 import { calcularSegundosLiquidosAoVivo, type ExecucaoRead } from '~/stores/execucoes'
@@ -16,10 +16,12 @@ interface Props {
   blocos: BlocoRead[]
   categoriasPorId: Map<string, CategoriaRead>
   execucoesPorBlocoId?: Map<string, ExecucaoRead[]>
+  blocosOcupados?: Set<string>
 }
 
 const props = withDefaults(defineProps<Props>(), {
   execucoesPorBlocoId: () => new Map(),
+  blocosOcupados: () => new Set(),
 })
 
 const emit = defineEmits<{
@@ -68,10 +70,9 @@ function atualizarLargura() {
 
 const blocosComMinutos = computed(() =>
   props.blocos.map((b) => {
-    const iniBruto = minutosDesdeMeiaNoiteNoFuso(b.inicio, props.dataIso, props.fuso)
-    const fimBruto = minutosDesdeMeiaNoiteNoFuso(b.fim, props.dataIso, props.fuso)
-    const inicioMin = Math.max(0, Math.min(1425, iniBruto))
-    const fimMin = Math.max(inicioMin + 15, fimBruto)
+    // Sem clamp: blocos que cruzam a meia-noite mantêm os limites reais (<0 ou >1440).
+    const inicioMin = minutosDesdeMeiaNoiteNoFuso(b.inicio, props.dataIso, props.fuso)
+    const fimMin = minutosDesdeMeiaNoiteNoFuso(b.fim, props.dataIso, props.fuso)
     return {
       bloco: b,
       inicioMin,
@@ -144,21 +145,25 @@ function aoMoverPorTeclado(
   deltaIni: number,
   deltaFim: number,
 ) {
-  const duracao = item.fimMin - item.inicioMin
-  let novoIni = item.inicioMin + deltaIni
-  let novoFim = item.fimMin + deltaFim
+  const modo: ModoArrasto
+    = deltaIni !== 0 && deltaIni === deltaFim
+      ? 'mover'
+      : deltaIni !== 0 ? 'redimensionar-topo' : 'redimensionar-base'
+  const { inicioMin, fimMin } = calcularNovosLimites(
+    modo,
+    item.inicioMin,
+    item.fimMin,
+    deltaIni !== 0 ? deltaIni : deltaFim,
+    { step: 15, duracaoMinimaMin: 15 },
+  )
+  if (inicioMin === item.inicioMin && fimMin === item.fimMin) return
 
-  if (deltaIni === deltaFim) {
-    novoIni = Math.max(0, Math.min(1440 - duracao, novoIni))
-    novoFim = novoIni + duracao
-  }
-  else {
-    novoFim = Math.max(novoIni + 15, Math.min(1440, novoFim))
-  }
-
-  const novoIniIso = criarTimestampUtcDeMinutosLocais(props.dataIso, novoIni, props.fuso)
-  const novoFimIso = criarTimestampUtcDeMinutosLocais(props.dataIso, novoFim, props.fuso)
-  emit('moverOuRedimensionar', item.bloco, novoIniIso, novoFimIso)
+  emit(
+    'moverOuRedimensionar',
+    item.bloco,
+    criarTimestampUtcDeMinutosLocais(props.dataIso, inicioMin, props.fuso),
+    criarTimestampUtcDeMinutosLocais(props.dataIso, fimMin, props.fuso),
+  )
 }
 
 function aoClicarFundoRegua(evento: MouseEvent) {
@@ -240,6 +245,7 @@ onBeforeUnmount(() => {
           :em-arrasto="arrastoAtivo?.blocoId === item.bloco.id"
           :percentual-executado="percentualExecutadoDoBloco(item.bloco)"
           :status-execucao="execucaoPrincipal(item.bloco.id)?.status ?? null"
+          :ocupado="props.blocosOcupados.has(item.bloco.id)"
           @selecionar="emit('selecionarBloco', $event)"
           @iniciar-pointer="(ev, modo) => aoIniciarPointerNoBloco(ev, item, modo)"
           @mover-teclado="(dIni, dFim) => aoMoverPorTeclado(item, dIni, dFim)"
