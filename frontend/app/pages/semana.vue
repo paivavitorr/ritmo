@@ -17,7 +17,7 @@ const auth = useAuthStore()
 const categoriasStore = useCategoriasStore()
 const blocosStore = useBlocosStore()
 
-const fusoUsuario = computed(() => auth.usuario?.fuso || 'America/Manaus')
+const fusoUsuario = computed(() => auth.usuario?.fuso || Intl.DateTimeFormat().resolvedOptions().timeZone)
 const inicioSemanaPref = computed(() => auth.usuario?.inicio_semana ?? 1)
 
 const inicioSemanaAtiva = ref(

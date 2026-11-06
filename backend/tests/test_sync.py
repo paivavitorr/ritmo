@@ -296,3 +296,50 @@ async def test_mudancas_isolamento_entre_usuarios(client: AsyncClient) -> None:
     # usuário 2 não consegue excluir/atualizar entidade do usuário 1
     [res] = await _batch(client, h2, _mut("bloco", "excluir", bid))
     assert res["status"] == "ignorado"
+
+
+async def test_modelo_bloco_criar_atualizar_excluir(client: AsyncClient) -> None:
+    headers, cat = await _registrar(client, "a@exemplo.com")
+    mid = str(uuid4())
+    payload = {
+        "categoria_id": cat,
+        "titulo": "Treino",
+        "dia_semana": 1,
+        "hora_inicio": "07:00",
+        "hora_fim": "08:00",
+        "pausas": [{"offset_min": 10, "duracao_min": 5}],
+        "versao": 99,
+    }
+    [criado] = await _batch(client, headers, _mut("modelo_bloco", "criar", mid, payload))
+    assert criado["status"] == "aplicado"
+    assert criado["versao_servidor"] == 1
+
+    [pausa_ruim] = await _batch(
+        client,
+        headers,
+        _mut(
+            "modelo_bloco",
+            "atualizar",
+            mid,
+            {"pausas": [{"offset_min": 50, "duracao_min": 30}]},
+            versao_base=1,
+        ),
+    )
+    assert pausa_ruim["status"] == "erro"
+
+    [ok] = await _batch(
+        client, headers, _mut("modelo_bloco", "atualizar", mid, {"titulo": "Corrida"}, 1)
+    )
+    assert ok["status"] == "aplicado"
+    [conf] = await _batch(
+        client, headers, _mut("modelo_bloco", "atualizar", mid, {"titulo": "X"}, 1)
+    )
+    assert conf["status"] == "conflito"
+    assert conf["entidade_servidor"]["titulo"] == "Corrida"
+
+    modelos = (await client.get("/modelos-bloco", headers=headers)).json()
+    assert [m["titulo"] for m in modelos] == ["Corrida"]
+
+    [exc] = await _batch(client, headers, _mut("modelo_bloco", "excluir", mid))
+    assert exc["status"] == "aplicado"
+    assert (await client.get("/modelos-bloco", headers=headers)).json() == []
