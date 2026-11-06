@@ -8,10 +8,8 @@ from app.core.errors import AppError, ConflitoError, NaoEncontradoError
 from app.core.tempo import data_local_no_fuso, garantir_utc
 from app.dependencies import CurrentUserDep, SessionDep
 from app.models.bloco import Bloco, PausaPlanejada
-from app.models.execucao import Execucao, PausaExecucao
 from app.repositories.bloco import BlocoRepository
 from app.repositories.categoria import CategoriaRepository
-from app.repositories.execucao import ExecucaoRepository
 from app.repositories.lembrete import LembreteRepository
 from app.schemas.bloco import (
     BlocoCreate,
@@ -20,7 +18,8 @@ from app.schemas.bloco import (
     PausaPlanejadaRead,
 )
 from app.schemas.execucao import ExecucaoRead
-from app.services.horas_liquidas import Intervalo, segundos_liquidos
+from app.services.execucao import conflito_se_integridade, registrar_confirmacao_bloco
+from app.services.horas_liquidas import Intervalo, segundos_liquidos, validar_periodo
 from app.services.lembrete import agendar_lembrete_para_bloco
 
 router = APIRouter(prefix="/blocos", tags=["blocos"])
@@ -72,8 +71,7 @@ async def listar_blocos(
     usuario: CurrentUserDep,
     session: SessionDep,
 ) -> list[BlocoRead]:
-    if ate < de:
-        raise AppError(422, "A data final deve ser maior ou igual à inicial", "validacao")
+    validar_periodo(de, ate)
     repo = BlocoRepository(session)
     blocos = await repo.listar_por_periodo(usuario.id, de, ate)
     return [serializar_bloco(b) for b in blocos]
@@ -119,9 +117,10 @@ async def criar_bloco(
 
     repo = BlocoRepository(session)
     bloco = Bloco(**kwargs)
-    await repo.criar(bloco)
-    await agendar_lembrete_para_bloco(session, bloco, usuario.antecedencia_padrao_min)
-    await session.commit()
+    async with conflito_se_integridade(session, "Já existe um bloco com este id"):
+        await repo.criar(bloco)
+        await agendar_lembrete_para_bloco(session, bloco, usuario.antecedencia_padrao_min)
+        await session.commit()
     recarregado = await repo.obter_do_usuario(usuario.id, bloco.id)
     assert recarregado is not None
     return serializar_bloco(recarregado)
@@ -244,58 +243,12 @@ async def confirmar_bloco_como_planejado(
     usuario: CurrentUserDep,
     session: SessionDep,
 ) -> ExecucaoRead:
-    """Cria ou substitui a `Execucao` concluída idêntica ao bloco planejado."""
+    """Registra "Fiz como planejado": devolve a execução concluída existente (idempotente),
+    encerra a em andamento ou cria uma com o intervalo planejado. Nunca sobrescreve tempo medido."""
     repo = BlocoRepository(session)
     bloco = await repo.obter_do_usuario(usuario.id, bloco_id)
     if bloco is None:
         raise NaoEncontradoError("Bloco não encontrado")
 
-    pausas_exec = [PausaExecucao(inicio=p.inicio, fim=p.fim) for p in bloco.pausas_planejadas]
-    liq = calcular_segundos_liquidos_bloco(bloco)
-
-    exec_repo = ExecucaoRepository(session)
-    existentes = await exec_repo.listar_por_bloco(usuario.id, bloco.id)
-    if existentes:
-        principal = next(
-            (e for e in existentes if e.status == "em_andamento" and e.fim is None),
-            existentes[-1],
-        )
-        for extra in existentes:
-            if extra.id == principal.id:
-                continue
-            if extra.status == "em_andamento" and extra.fim is None:
-                extra.fim = datetime.now(UTC)
-                extra.status = "concluida"
-            extra.excluido_em = datetime.now(UTC)
-            extra.versao += 1
-
-        principal.categoria_id = bloco.categoria_id
-        principal.inicio = bloco.inicio
-        principal.fim = bloco.fim
-        principal.status = "concluida"
-        principal.origem = "confirmacao"
-        principal.pausas.clear()
-        for p in pausas_exec:
-            principal.pausas.append(p)
-        principal.segundos_liquidos = liq
-        principal.versao += 1
-        alvo_id = principal.id
-    else:
-        execucao = Execucao(
-            usuario_id=usuario.id,
-            categoria_id=bloco.categoria_id,
-            bloco_id=bloco.id,
-            inicio=bloco.inicio,
-            fim=bloco.fim,
-            status="concluida",
-            origem="confirmacao",
-            segundos_liquidos=liq,
-            pausas=pausas_exec,
-        )
-        await exec_repo.criar(execucao)
-        alvo_id = execucao.id
-
-    await session.commit()
-    recarregada = await exec_repo.obter_do_usuario(usuario.id, alvo_id)
-    assert recarregada is not None
-    return ExecucaoRead.model_validate(recarregada)
+    execucao = await registrar_confirmacao_bloco(session, bloco, datetime.now(UTC))
+    return ExecucaoRead.model_validate(execucao)

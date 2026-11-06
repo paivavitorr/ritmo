@@ -16,7 +16,7 @@ from app.schemas.modelo_semana import (
     ModeloBlocoUpdate,
     _duracao_minutos_modelo,
 )
-from app.services.lembrete import agendar_lembrete_para_bloco
+from app.services.execucao import conflito_se_integridade
 from app.services.modelo_semana import MaterializadorSemanaService
 
 router = APIRouter(tags=["modelos-semana"])
@@ -144,8 +144,7 @@ async def aplicar_modelo(
     session: SessionDep,
 ) -> list[BlocoRead]:
     service = MaterializadorSemanaService(session)
-    blocos = await service.aplicar_modelo_na_semana(usuario, inicio)
-    for b in blocos:
-        await agendar_lembrete_para_bloco(session, b, usuario.antecedencia_padrao_min)
-    await session.commit()
+    async with conflito_se_integridade(session, "Este modelo já está sendo aplicado nesta semana"):
+        blocos = await service.aplicar_modelo_na_semana(usuario, inicio, datetime.now(UTC))
+        await session.commit()
     return [serializar_bloco(b) for b in blocos]
