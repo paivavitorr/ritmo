@@ -1,14 +1,14 @@
 import asyncio
-import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.core.errors import registrar_exception_handlers
-from app.db import SessionLocal, engine
+from app.core.logging import RequestIdMiddleware, configurar_logging
+from app.db import engine
 from app.routers import (
     auth,
     blocos,
@@ -20,42 +20,38 @@ from app.routers import (
     saude,
     sync,
 )
-from app.services.lembrete import processar_lembretes_pendentes
-
-logger = logging.getLogger(__name__)
-
-
-async def _worker_despachador_lembretes() -> None:
-    """Loop em segundo plano que despacha Web Push a cada 30 segundos."""
-    while True:
-        try:
-            async with SessionLocal() as session:
-                await processar_lembretes_pendentes(session)
-        except Exception:
-            logger.exception("Erro no ciclo de despacho de lembretes em segundo plano")
-        await asyncio.sleep(30)
+from app.worker import loop_despachador
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    configurar_logging(settings.ambiente)
+    parar = asyncio.Event()
     tarefa_worker: asyncio.Task[None] | None = None
+    # Loop embutido só quando ativo; em produção use `python -m app.worker`.
     if settings.despachador_ativo and settings.ambiente != "teste":
-        tarefa_worker = asyncio.create_task(_worker_despachador_lembretes())
+        tarefa_worker = asyncio.create_task(loop_despachador(parar))
 
     yield
 
     if tarefa_worker is not None:
-        tarefa_worker.cancel()
-        with suppress(asyncio.CancelledError):
-            await tarefa_worker
+        parar.set()
+        await tarefa_worker
 
     await engine.dispose()
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="Ritmo API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Ritmo API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if settings.docs_habilitado else None,
+        redoc_url="/redoc" if settings.docs_habilitado else None,
+        openapi_url="/openapi.json" if settings.docs_habilitado else None,
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -64,6 +60,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    app.add_middleware(RequestIdMiddleware)  # mais externo: cobre CORS e respostas de erro
 
     registrar_exception_handlers(app)
     app.include_router(saude.router)
