@@ -1,0 +1,81 @@
+# Produção: `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`
+# Todas as variáveis marcadas com `:?` são obrigatórias (o compose aborta se faltarem).
+# TLS/proxy reverso ficam por fora (ex.: Caddy/Traefik/nginx do host) apontando para
+# api:8000 e frontend:8080; o postgres não é exposto no host.
+
+x-api-env: &api-env
+  AMBIENTE: producao
+  DATABASE_URL: postgresql+asyncpg://${DB_USER:?}:${DB_PASSWORD:?}@postgres:5432/${DB_NAME:?}
+  CORS_ORIGENS: ${CORS_ORIGENS:?}
+  JWT_SEGREDO: ${JWT_SEGREDO:?}
+  VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:?}
+  VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:?}
+  VAPID_CLAIM_EMAIL: ${VAPID_CLAIM_EMAIL:?}
+  COOKIE_SEGURO: "true"
+  COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+  REGISTRO_ABERTO: ${REGISTRO_ABERTO:-false}
+  DOCS_HABILITADO: "false"
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:?}
+      POSTGRES_USER: ${DB_USER:?}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: aplica as migrations e termina; api e worker só sobem depois.
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+      DESPACHADOR_ATIVO: "false"  # o loop de lembretes roda no serviço `worker`
+    ports:
+      - "${API_PORTA:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    environment: *api-env
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        NUXT_PUBLIC_API_BASE: ${API_URL_PUBLICA:?}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORTA:-8080}:8080"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
