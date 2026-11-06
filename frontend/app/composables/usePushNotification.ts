@@ -16,6 +16,85 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   return outputArray
 }
 
+const TEMPO_MAX_SW_MS = 5000
+const CACHE_PENDENCIAS = 'ritmo-push-pendencias'
+const CHAVE_PENDENCIA = '/__push-pendente__'
+
+type Requisitar = ReturnType<typeof useApi>['requisitar']
+
+/** `serviceWorker.ready` nunca resolve sem SW (ex.: dev); espera no máximo `ms`. */
+async function swProntoComTimeout(ms = TEMPO_MAX_SW_MS): Promise<ServiceWorkerRegistration | null> {
+  return await Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise<null>(resolve => setTimeout(() => resolve(null), ms)),
+  ])
+}
+
+function ehIos(): boolean {
+  const ua = navigator.userAgent
+  const ipadComoMac = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+  return /iPad|iPhone|iPod/.test(ua) || ipadComoMac
+}
+
+function emModoInstalado(): boolean {
+  return window.matchMedia('(display-mode: standalone)').matches
+    || (navigator as Navigator & { standalone?: boolean }).standalone === true
+}
+
+function mesmaChave(a: ArrayBuffer | null | undefined, b: Uint8Array): boolean {
+  if (!a || a.byteLength !== b.byteLength) return false
+  const va = new Uint8Array(a)
+  return va.every((byte, i) => byte === b[i])
+}
+
+async function desassinarNoBackend(requisitar: Requisitar, endpoint: string) {
+  try {
+    await requisitar('/push/desassinar', { method: 'POST', body: { endpoint } })
+  }
+  catch {
+    // O backend também descarta endpoints expirados ao receber 404/410 do serviço push.
+  }
+}
+
+/**
+ * Conclui no backend uma re-assinatura feita pelo service worker (`pushsubscriptionchange`),
+ * que não tem token para chamar a API. Chamado quando há sessão.
+ */
+export async function sincronizarPendenciasPush(requisitar: Requisitar): Promise<void> {
+  if (!import.meta.client || !('caches' in window)) return
+  try {
+    const cache = await caches.open(CACHE_PENDENCIAS)
+    const resposta = await cache.match(CHAVE_PENDENCIA)
+    if (!resposta) return
+    const pendencia = await resposta.json() as {
+      endpointAntigo: string | null
+      assinatura: { endpoint?: string, keys?: { p256dh?: string, auth?: string } }
+    }
+    const { endpoint, keys } = pendencia.assinatura
+    if (!endpoint || !keys?.p256dh || !keys.auth) {
+      await cache.delete(CHAVE_PENDENCIA)
+      return
+    }
+    const payload: PushAssinaturaCreate = {
+      endpoint,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+      user_agent: navigator.userAgent,
+    }
+    await requisitar<PushAssinaturaRead>('/push/assinar', {
+      method: 'POST',
+      body: payload as Record<string, unknown>,
+    })
+    if (pendencia.endpointAntigo && pendencia.endpointAntigo !== endpoint) {
+      await desassinarNoBackend(requisitar, pendencia.endpointAntigo)
+    }
+    await cache.delete(CHAVE_PENDENCIA)
+  }
+  catch {
+    // Mantém a pendência para a próxima tentativa.
+  }
+}
+
 export function usePushNotification() {
   const { requisitar } = useApi()
 
@@ -24,6 +103,8 @@ export function usePushNotification() {
   const inscrito = ref(false)
   const carregando = ref(false)
   const erro = ref<string | null>(null)
+  /** iOS só entrega push para apps instalados na tela inicial. */
+  const requerInstalacaoIos = ref(false)
 
   function verificarSuporte(): boolean {
     if (!import.meta.client) return false
@@ -31,6 +112,7 @@ export function usePushNotification() {
   }
 
   async function atualizarStatus() {
+    requerInstalacaoIos.value = import.meta.client && ehIos() && !emModoInstalado()
     if (!verificarSuporte()) {
       suportado.value = false
       return
@@ -39,7 +121,11 @@ export function usePushNotification() {
     permissao.value = Notification.permission
 
     try {
-      const reg = await navigator.serviceWorker.ready
+      const reg = await swProntoComTimeout()
+      if (!reg) {
+        inscrito.value = false
+        return
+      }
       const sub = await reg.pushManager.getSubscription()
       inscrito.value = Boolean(sub)
     }
@@ -71,15 +157,23 @@ export function usePushNotification() {
         throw new Error('Chave pública VAPID não configurada no servidor.')
       }
 
-      const reg = await navigator.serviceWorker.ready
+      const reg = await swProntoComTimeout()
+      if (!reg) {
+        throw new Error('O service worker ainda não está ativo. Recarregue o app (use a versão instalada ou de produção) e tente novamente.')
+      }
+      const chave = urlBase64ToUint8Array(public_key)
       let sub = await reg.pushManager.getSubscription()
-      if (sub) {
+      if (sub && !mesmaChave(sub.options.applicationServerKey, chave)) {
+        // Chave VAPID mudou: descarta a assinatura antiga também no backend.
+        const endpointAntigo = sub.endpoint
         await sub.unsubscribe()
+        await desassinarNoBackend(requisitar, endpointAntigo)
+        sub = null
       }
 
-      sub = await reg.pushManager.subscribe({
+      sub ??= await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(public_key),
+        applicationServerKey: chave,
       })
 
       const subJson = sub.toJSON()
@@ -120,18 +214,10 @@ export function usePushNotification() {
 
     carregando.value = true
     try {
-      const reg = await navigator.serviceWorker.ready
-      const sub = await reg.pushManager.getSubscription()
+      const reg = await swProntoComTimeout()
+      const sub = await reg?.pushManager.getSubscription()
       if (sub) {
-        try {
-          await requisitar('/push/desassinar', {
-            method: 'POST',
-            body: { endpoint: sub.endpoint },
-          })
-        }
-        catch {
-          // Prossegue com desinscrição local mesmo se a chamada de rede falhar
-        }
+        await desassinarNoBackend(requisitar, sub.endpoint)
         await sub.unsubscribe()
       }
       inscrito.value = false
@@ -156,6 +242,7 @@ export function usePushNotification() {
     inscrito,
     carregando,
     erro,
+    requerInstalacaoIos,
     atualizarStatus,
     ativar,
     desativar,

@@ -21,7 +21,7 @@ const estilo = computed(() => ESTILOS_CATEGORIA[props.cor])
     :type="props.interativo ? 'button' : undefined"
     :aria-pressed="props.interativo ? props.selecionado : undefined"
     class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition-colors duration-150"
-    :class="props.selecionado ? estilo.chipAtivo : estilo.chip"
+    :class="[props.selecionado ? estilo.chipAtivo : estilo.chip, props.interativo ? 'min-h-11' : '']"
   >
     <span
       class="h-2 w-2 rounded-full"
