@@ -39,6 +39,7 @@ function rotaAtiva(caminho: string): boolean {
           >
             Ritmo
           </NuxtLink>
+          <!-- IndicadorSync: plugar na integração -->
           <span
             class="inline-flex items-center gap-1.5 text-xs text-grafite-suave"
             :title="conexao.api === 'ok' ? 'Conectado à API' : 'API indisponível (modo offline)'"
@@ -97,9 +98,9 @@ function rotaAtiva(caminho: string): boolean {
     </aside>
 
     <!-- Conteúdo principal -->
-    <div class="flex flex-1 flex-col pb-20 lg:pb-0">
+    <div class="flex flex-1 flex-col pb-[calc(5.5rem+env(safe-area-inset-bottom))] lg:pb-0">
       <!-- Cabeçalho compacto no mobile -->
-      <header class="flex items-center justify-between border-b border-linha bg-papel px-5 py-3.5 lg:hidden">
+      <header class="flex items-center justify-between border-b border-linha bg-papel px-5 pb-3.5 pt-[max(0.875rem,env(safe-area-inset-top))] lg:hidden">
         <NuxtLink
           to="/"
           class="text-lg font-semibold text-tinta"
@@ -107,6 +108,7 @@ function rotaAtiva(caminho: string): boolean {
           Ritmo
         </NuxtLink>
         <div class="flex items-center gap-3">
+          <!-- IndicadorSync: plugar na integração -->
           <span class="inline-flex items-center gap-1.5 text-xs text-grafite-suave">
             <span
               class="h-2 w-2 rounded-full"
@@ -130,14 +132,14 @@ function rotaAtiva(caminho: string): boolean {
 
     <!-- Barra inferior no mobile (< 1024px) -->
     <nav
-      class="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-linha bg-papel/95 px-2 py-2 backdrop-blur lg:hidden"
+      class="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-linha bg-papel/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden"
       aria-label="Navegação inferior"
     >
       <NuxtLink
         v-for="item in itensNavegacao"
         :key="item.para"
         :to="item.para"
-        class="flex flex-1 flex-col items-center rounded-[var(--radius-bloco)] py-1.5 text-xs font-medium transition-colors duration-150"
+        class="flex min-h-11 flex-1 flex-col items-center justify-center rounded-[var(--radius-bloco)] py-1.5 text-xs font-medium transition-colors duration-150"
         :class="
           rotaAtiva(item.para)
             ? 'bg-ardosia-200/70 text-ardosia-700'

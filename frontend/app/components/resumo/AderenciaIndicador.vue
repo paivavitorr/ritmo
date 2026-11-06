@@ -1,6 +1,6 @@
 <script setup lang="ts">
 interface Props {
-  valor: number // [0.0, 1.0] ou superior
+  valor: number | null | undefined // [0.0, 1.0] ou superior; null = sem plano no período
   rotulo?: string
   tamanho?: 'sm' | 'md'
 }
@@ -10,9 +10,13 @@ const props = withDefaults(defineProps<Props>(), {
   tamanho: 'md',
 })
 
-const pct = computed(() => Math.round(props.valor * 100))
+const semPlano = computed(() => props.valor == null)
+const pct = computed(() => Math.round((props.valor ?? 0) * 100))
 
 const estiloCor = computed(() => {
+  if (semPlano.value) {
+    return 'border-linha bg-nevoa text-grafite-suave'
+  }
   if (pct.value >= 85) {
     return 'border-salvia-200 bg-salvia-50 text-salvia-700'
   }
@@ -32,6 +36,17 @@ const estiloCor = computed(() => {
     ]"
   >
     <span class="opacity-75">{{ props.rotulo }}</span>
-    <span class="tabular font-semibold">{{ pct }}%</span>
+    <span
+      v-if="semPlano"
+      class="font-semibold"
+      title="Sem plano no período"
+    >
+      <span aria-hidden="true">—</span>
+      <span class="sr-only">Sem plano</span>
+    </span>
+    <span
+      v-else
+      class="tabular font-semibold"
+    >{{ pct }}%</span>
   </div>
 </template>
