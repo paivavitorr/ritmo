@@ -16,11 +16,14 @@ from app.core.security import (
     gerar_refresh_token,
     hash_refresh_token,
     verificar_senha,
+    verificar_senha_fantasma,
 )
 from app.models.usuario import SessaoRefresh, Usuario
 from app.repositories.categoria import CategoriaRepository
 from app.repositories.usuario import SessaoRefreshRepository, UsuarioRepository
 from app.schemas.usuario import LoginRequest, TokenResponse, UsuarioCreate, UsuarioRead
+
+JANELA_GRACA_REFRESH = timedelta(seconds=30)
 
 
 def _garantir_utc(dt: datetime) -> datetime:
@@ -49,6 +52,9 @@ class AuthService:
         if not self.settings.registro_aberto:
             raise PermissaoNegadaError("O registro de novos usuários está desativado")
 
+        # Decisão de produto: e-mail já cadastrado devolve 409 explícito (melhor UX), o que
+        # permite enumerar contas. A mitigação é o rate limit de /auth/registrar; para
+        # eliminar o vetor seria preciso confirmação por e-mail (fora do escopo do MVP).
         existente = await self.usuarios.obter_por_email(dados.email, incluir_excluidos=True)
         if existente is not None:
             raise ConflitoError("Já existe uma conta cadastrada com este e-mail")
@@ -76,7 +82,11 @@ class AuthService:
         self, credenciais: LoginRequest, user_agent: str | None = None
     ) -> tuple[TokenResponse, str]:
         usuario = await self.usuarios.obter_por_email(credenciais.email)
-        if usuario is None or not verificar_senha(credenciais.senha, usuario.senha_hash):
+        if usuario is None:
+            # Mitiga enumeração por tempo: gasta o mesmo custo de Argon2 de um login real.
+            verificar_senha_fantasma(credenciais.senha)
+            raise NaoAutenticadoError("E-mail ou senha inválidos")
+        if not verificar_senha(credenciais.senha, usuario.senha_hash):
             raise NaoAutenticadoError("E-mail ou senha inválidos")
 
         resposta, refresh_bruto = await self._emitir_par_tokens(usuario, user_agent=user_agent)
@@ -90,22 +100,26 @@ class AuthService:
             raise NaoAutenticadoError("Refresh token ausente")
 
         token_hash = hash_refresh_token(refresh_bruto)
-        sessao_atual = await self.sessoes.obter_por_hash(token_hash)
+        # FOR UPDATE: requisições concorrentes com o mesmo token são serializadas.
+        sessao_atual = await self.sessoes.obter_por_hash(token_hash, para_atualizar=True)
         if sessao_atual is None:
             raise NaoAutenticadoError("Sessão inválida")
 
         agora = datetime.now(UTC)
+        em_graca = False
 
-        # Se a sessão já foi revogada/rotacionada antes, houve reuso de token:
-        # revoga toda a família por segurança.
         if sessao_atual.revogado_em is not None:
-            await self.sessoes.revogar_familia(sessao_atual.familia_id, agora)
-            await self.session.commit()
-            raise NaoAutenticadoError("Sessão revogada por detecção de reuso")
+            em_graca = await self._dentro_da_graca(sessao_atual, agora)
+            if not em_graca:
+                # Reuso fora da janela de graça: possível roubo, revoga a família inteira.
+                await self.sessoes.revogar_familia(sessao_atual.familia_id, agora)
+                await self.session.commit()
+                raise NaoAutenticadoError("Sessão revogada por detecção de reuso")
 
         if _garantir_utc(sessao_atual.expira_em) <= agora:
-            sessao_atual.revogado_em = agora
-            await self.session.commit()
+            if not em_graca:
+                sessao_atual.revogado_em = agora
+                await self.session.commit()
             raise NaoAutenticadoError("Sessão expirada")
 
         usuario = await self.usuarios.obter_por_id(sessao_atual.usuario_id)
@@ -123,8 +137,11 @@ class AuthService:
         )
         await self.sessoes.criar(nova_sessao)
 
-        sessao_atual.revogado_em = agora
-        sessao_atual.substituido_por_id = nova_sessao.id
+        # Na graça o token já foi rotacionado: não sobrescreve o sucessor original,
+        # que continua válido (o cliente concorrente pode ter recebido o cookie dele).
+        if not em_graca:
+            sessao_atual.revogado_em = agora
+            sessao_atual.substituido_por_id = nova_sessao.id
 
         access_token, expira_seg = criar_access_token(usuario.id)
         await self.session.commit()
@@ -137,6 +154,19 @@ class AuthService:
             ),
             novo_bruto,
         )
+
+    async def _dentro_da_graca(self, sessao: SessaoRefresh, agora: datetime) -> bool:
+        """True se o token foi rotacionado há pouco e o sucessor segue ativo.
+
+        Cobre abas/requisições concorrentes que apresentam o mesmo refresh quase ao mesmo
+        tempo; logout ou revogação da família (sucessor revogado) não entram na graça.
+        """
+        if sessao.revogado_em is None or sessao.substituido_por_id is None:
+            return False
+        if agora - _garantir_utc(sessao.revogado_em) >= JANELA_GRACA_REFRESH:
+            return False
+        sucessora = await self.sessoes.obter_por_id(sessao.substituido_por_id)
+        return sucessora is not None and sucessora.revogado_em is None
 
     async def sair(self, refresh_bruto: str | None) -> None:
         if not refresh_bruto:

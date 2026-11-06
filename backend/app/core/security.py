@@ -1,6 +1,7 @@
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from uuid import UUID
 
 import jwt
@@ -18,6 +19,16 @@ def gerar_hash_senha(senha: str) -> str:
 
 def verificar_senha(senha: str, senha_hash: str) -> bool:
     return password_hasher.verify(senha, senha_hash)
+
+
+@lru_cache
+def _hash_fantasma() -> str:
+    return password_hasher.hash("senha-fantasma-ritmo")
+
+
+def verificar_senha_fantasma(senha: str) -> None:
+    """Gasta o mesmo tempo de uma verificação real (usuário inexistente no login)."""
+    password_hasher.verify(senha, _hash_fantasma())
 
 
 def criar_access_token(usuario_id: UUID) -> tuple[str, int]:

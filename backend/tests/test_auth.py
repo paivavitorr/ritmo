@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import jwt
+import pytest
 from httpx import AsyncClient
 
 from app.config import get_settings
@@ -100,7 +101,11 @@ async def test_login_sucesso_e_falha(client: AsyncClient) -> None:
     assert get_settings().refresh_cookie_nome in certo.cookies
 
 
-async def test_rotacao_refresh_e_deteccao_de_reuso(client: AsyncClient) -> None:
+async def test_rotacao_refresh_e_deteccao_de_reuso(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Sem janela de graça: qualquer reapresentação do token rotacionado é reuso.
+    monkeypatch.setattr("app.services.auth.JANELA_GRACA_REFRESH", timedelta(0))
     await _registrar_padrao(client)
     cookie_nome = get_settings().refresh_cookie_nome
     primeiro_refresh = client.cookies.get(cookie_nome)
@@ -156,6 +161,76 @@ async def test_access_token_expirado_e_invalido(client: AsyncClient) -> None:
     r_exp = await client.get("/auth/eu", headers={"Authorization": f"Bearer {expirado}"})
     assert r_exp.status_code == 401
     assert "expirado" in r_exp.json()["detail"].lower()
+
+
+async def test_refresh_concorrente_dentro_da_graca_nao_revoga_familia(
+    client: AsyncClient,
+) -> None:
+    await _registrar_padrao(client)
+    cookie_nome = get_settings().refresh_cookie_nome
+    primeiro = client.cookies.get(cookie_nome)
+    assert primeiro is not None
+
+    r1 = await client.post("/auth/refresh")
+    assert r1.status_code == 200
+    segundo = client.cookies.get(cookie_nome)
+
+    # A "outra aba" ainda apresenta o primeiro token, logo após a rotação.
+    client.cookies.clear()
+    client.cookies.set(cookie_nome, primeiro, path="/auth")
+    r2 = await client.post("/auth/refresh")
+    assert r2.status_code == 200
+    terceiro = r2.cookies.get(cookie_nome)
+    assert terceiro not in (None, primeiro, segundo)
+
+    # O sucessor original segue válido.
+    client.cookies.clear()
+    client.cookies.set(cookie_nome, segundo, path="/auth")
+    assert (await client.post("/auth/refresh")).status_code == 200
+
+
+async def test_logout_encerra_graca(client: AsyncClient) -> None:
+    await _registrar_padrao(client)
+    cookie_nome = get_settings().refresh_cookie_nome
+    primeiro = client.cookies.get(cookie_nome)
+    assert (await client.post("/auth/refresh")).status_code == 200
+    assert (await client.post("/auth/sair")).status_code == 204
+
+    client.cookies.set(cookie_nome, primeiro, path="/auth")
+    assert (await client.post("/auth/refresh")).status_code == 401
+
+
+async def test_login_usuario_inexistente_usa_hash_fantasma(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chamadas: list[str] = []
+    monkeypatch.setattr("app.services.auth.verificar_senha_fantasma", chamadas.append)
+    resposta = await client.post(
+        "/auth/login", json={"email": "ninguem@exemplo.com", "senha": "qualquer-senha-1"}
+    )
+    assert resposta.status_code == 401
+    assert chamadas == ["qualquer-senha-1"]
+
+
+async def test_rate_limit_login_retorna_429(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "rate_limit_ativo", True)
+    credenciais = {"email": "ninguem@exemplo.com", "senha": "qualquer-senha-1"}
+    for _ in range(10):
+        assert (await client.post("/auth/login", json=credenciais)).status_code == 401
+
+    bloqueada = await client.post("/auth/login", json=credenciais)
+    assert bloqueada.status_code == 429
+    assert bloqueada.json()["codigo"] == "limite_excedido"
+    assert int(bloqueada.headers["Retry-After"]) >= 1
+
+
+async def test_request_id_e_devolvido(client: AsyncClient) -> None:
+    gerado = await client.get("/saude")
+    assert gerado.headers["X-Request-ID"]
+    informado = await client.get("/saude", headers={"X-Request-ID": "abc-123"})
+    assert informado.headers["X-Request-ID"] == "abc-123"
 
     r_sem = await client.get("/auth/eu")
     assert r_sem.status_code == 401
