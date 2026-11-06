@@ -41,8 +41,18 @@ class SessaoRefreshRepository:
         await self.session.flush()
         return sessao
 
-    async def obter_por_hash(self, token_hash: str) -> SessaoRefresh | None:
+    async def obter_por_hash(
+        self, token_hash: str, *, para_atualizar: bool = False
+    ) -> SessaoRefresh | None:
         stmt = select(SessaoRefresh).where(SessaoRefresh.token_hash == token_hash)
+        if para_atualizar:
+            # Serializa rotações concorrentes do mesmo token (no-op no SQLite).
+            stmt = stmt.with_for_update()
+        resultado = await self.session.execute(stmt)
+        return resultado.scalar_one_or_none()
+
+    async def obter_por_id(self, sessao_id: UUID) -> SessaoRefresh | None:
+        stmt = select(SessaoRefresh).where(SessaoRefresh.id == sessao_id)
         resultado = await self.session.execute(stmt)
         return resultado.scalar_one_or_none()
 
