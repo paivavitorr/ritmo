@@ -167,7 +167,7 @@ onMounted(carregarResumo)
       <div class="space-y-2">
         <CategoriaLinha
           v-for="cat in resumo.categorias"
-          :key="cat.categoria_id ?? 'avulso'"
+          :key="`${cat.categoria_id ?? 'avulso'}-${cat.eh_espontaneo ? 'e' : 'p'}`"
           :categoria="cat"
         />
       </div>
