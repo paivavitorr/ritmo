@@ -15,6 +15,16 @@ export default defineNuxtConfig({
       meta: [
         { name: 'description', content: 'Ritmo — sua rotina em blocos' },
         { name: 'theme-color', content: '#F5F6F3' },
+        { name: 'mobile-web-app-capable', content: 'yes' },
+        { name: 'apple-mobile-web-app-capable', content: 'yes' },
+        { name: 'apple-mobile-web-app-title', content: 'Ritmo' },
+        { name: 'apple-mobile-web-app-status-bar-style', content: 'default' },
+      ],
+      link: [
+        { rel: 'manifest', href: '/manifest.webmanifest' },
+        { rel: 'icon', href: '/favicon.ico', sizes: '48x48' },
+        { rel: 'icon', href: '/icon.svg', type: 'image/svg+xml', sizes: 'any' },
+        { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' },
       ],
     },
   },
@@ -45,33 +55,30 @@ export default defineNuxtConfig({
   },
 
   pwa: {
-    registerType: 'autoUpdate',
+    // 'prompt': a nova versão só entra após o usuário tocar em "Atualizar" (AvisoAtualizacao).
+    registerType: 'prompt',
     manifest: {
       name: 'Ritmo — Cronograma Inteligente',
       short_name: 'Ritmo',
       description: 'Cronograma inteligente de rotina pessoal, blocos de tempo e horas líquidas',
       theme_color: '#F5F6F3',
-      background_color: '#FFFFFF',
+      background_color: '#F5F6F3',
       display: 'standalone',
       orientation: 'portrait',
       lang: 'pt-BR',
       icons: [
-        {
-          src: '/pwa-192x192.png',
-          sizes: '192x192',
-          type: 'image/png',
-        },
-        {
-          src: '/pwa-512x512.png',
-          sizes: '512x512',
-          type: 'image/png',
-        },
+        { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+        { src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+        { src: '/pwa-maskable-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+        { src: '/pwa-maskable-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
       ],
     },
     workbox: {
       navigateFallback: '/',
       globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2}'],
+      cleanupOutdatedCaches: true,
       importScripts: ['/sw-push.js'],
     },
+    devOptions: { enabled: false },
   },
 })

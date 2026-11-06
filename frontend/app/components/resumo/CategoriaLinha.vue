@@ -15,7 +15,7 @@ const estiloCor = computed(() => {
   return ESTILOS_CATEGORIA[token] ?? ESTILOS_CATEGORIA.ardosia
 })
 
-const pctVolume = computed(() => Math.round(props.categoria.aderencia_volume * 100))
+const pctVolume = computed(() => Math.round((props.categoria.aderencia_volume ?? 0) * 100))
 </script>
 
 <template>
@@ -24,6 +24,7 @@ const pctVolume = computed(() => Math.round(props.categoria.aderencia_volume * 1
       <span
         class="h-3 w-3 shrink-0 rounded-full"
         :class="estiloCor.ponto"
+        aria-hidden="true"
       />
       <div>
         <p class="text-sm font-semibold text-tinta">
