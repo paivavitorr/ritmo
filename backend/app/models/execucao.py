@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid6 import uuid7
 
@@ -16,10 +16,20 @@ class Execucao(EntidadeMixin, Base):
     """Registro do tempo realmente executado (com ou sem bloco planejado)."""
 
     __tablename__ = "execucao"
-
-    usuario_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("usuario.id", ondelete="CASCADE"), index=True
+    __table_args__ = (
+        # Um único cronômetro em andamento por usuário.
+        Index(
+            "uq_execucao_usuario_em_andamento",
+            "usuario_id",
+            unique=True,
+            postgresql_where=text("status = 'em_andamento' AND excluido_em IS NULL"),
+            sqlite_where=text("status = 'em_andamento' AND excluido_em IS NULL"),
+        ),
+        Index("ix_execucao_usuario_inicio", "usuario_id", "inicio"),
+        Index("ix_execucao_usuario_atualizado_em", "usuario_id", "atualizado_em"),
     )
+
+    usuario_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("usuario.id", ondelete="CASCADE"))
     categoria_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("categoria.id", ondelete="RESTRICT"), index=True
     )

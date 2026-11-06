@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, Integer, SmallInteger, String, Uuid
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, SmallInteger, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, EntidadeMixin
@@ -29,10 +29,9 @@ CORES_CATEGORIA: tuple[CorCategoria, ...] = (
 
 class Categoria(EntidadeMixin, Base):
     __tablename__ = "categoria"
+    __table_args__ = (Index("ix_categoria_usuario_atualizado_em", "usuario_id", "atualizado_em"),)
 
-    usuario_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("usuario.id", ondelete="CASCADE"), index=True
-    )
+    usuario_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("usuario.id", ondelete="CASCADE"))
     nome: Mapped[str] = mapped_column(String(40))
     cor: Mapped[str] = mapped_column(String(20))
     icone: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
