@@ -27,7 +27,7 @@ run-api:
 	cd backend && DATABASE_URL=postgresql+asyncpg://ritmo:ritmo@localhost:5433/ritmo uv run uvicorn app.main:app --reload
 
 run-front:
-	cd frontend && pnpm dev
+	ulimit -n 65536 && cd frontend && pnpm dev
 
 migrate:
 	cd backend && uv run alembic upgrade head

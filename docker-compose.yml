@@ -19,6 +19,9 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
     # Só dev: a imagem não roda migrations (em produção use docker-compose.prod.yml).
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     develop:
@@ -44,6 +47,10 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
+    volumes:
+      - ./frontend/app:/app/app
+      - ./frontend/public:/app/public
+      - ./frontend/nuxt.config.ts:/app/nuxt.config.ts
     develop:
       watch:
         - action: sync
